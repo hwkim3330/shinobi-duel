@@ -310,6 +310,12 @@ export class Game {
    * ever be read by the screen that asked for it.
    */
   private go(s: GState): void {
+    // Pointer lock and the hidden cursor belong to the fight; every menu / overlay frees the mouse.
+    const fighting = s === "fight" || s === "deathblow" || s === "finisher";
+    this.input.lockable = fighting;
+    document.body.classList.toggle("fighting", fighting);
+    if (!fighting) this.input.releaseLock();
+    else if (this.state !== "fight" && this.state !== "deathblow" && this.state !== "finisher") this.input.requestLock();
     this.state = s;
     this.endT = 0;
     this.promptShown = false;

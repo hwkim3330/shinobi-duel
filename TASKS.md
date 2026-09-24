@@ -85,6 +85,10 @@ small viewport on any gpu.mjs tool (light GPU load while the machine is shared).
 - `node tools/combat.mjs` — 19 sword-fight / deflect glitch repros (one per bug in "Combat pass" below).
 - `node tools/deathloop.mjs` — real keyboard/mouse events on the live loop, 3 rounds of die (mashing) → resurrect →
   mash → die → DEFEAT → mash → one Enter restarts → mash; plus Esc → title → one fight. Proves the death loop is gone.
+- `node tools/menu.mjs [--shot]` — mouse on the menus: cursor visible and pointer lock off on title /
+  resurrection / defeat / victory, hover + click on each difficulty option (no start), "click to begin" and a
+  click outside the options start, controls lines fit at 1280×720 / 1920×1080 / 2560×1440. Pointer lock and
+  `cursor: none` (`body.fighting`) are the fight's only (`Game.go` → `Input.lockable` / `releaseLock`).
 - `node tools/fairness.mjs` — simulated fights: frame-perfect bot wins without dying (>35 s), a "learner"
   (±55 ms on every reaction, 12% blows missed) wins on the 1st/2nd try, a masher (attack + guard spam) loses.
 - `node tools/skin-smoke.mjs` — SkinnedCharacter layer on a synthetic Mixamo-shaped GLB (14 checks, dev server only).

@@ -22,12 +22,16 @@ const CSS = /* css */ `
 #title .press { position: absolute; right: 7vw; bottom: 9vh; height: 30px; width: auto; opacity: 0.8; animation: breathe 3.6s ease-in-out infinite; }
 #title .keys { position: absolute; left: 4vw; bottom: 7vh; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; opacity: 0.72; width: max-content; }
 #title .keys img { height: min(2.6vh, 22px); width: auto; flex: none; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.9)); }
+/* the begin prompt is clickable; its mousedown bubbles to Input as a title "any key" press */
+#title:not(.hidden) .press.begin { pointer-events: auto; cursor: pointer; }
+#title .press.begin:hover { animation: none; opacity: 1; filter: drop-shadow(0 0 6px rgba(255,140,60,0.45)); }
 @keyframes breathe { 0%,100% { opacity: 0.35 } 50% { opacity: 0.85 } }
 /* difficulty: three brushed choices, the chosen one underlined in crimson ink */
 #title .diff { position: absolute; left: 50%; bottom: 8.5vh; transform: translateX(-50%); display: flex; align-items: flex-end; gap: min(3.2vw, 44px); }
 #title .diff .opt { position: relative; display: flex; align-items: center; gap: 6px; padding: 4px 6px 12px; opacity: 0.5; cursor: pointer; transition: opacity 0.25s ease; filter: drop-shadow(0 1px 4px rgba(0,0,0,0.85)); }
 #title:not(.hidden) .diff .opt { pointer-events: auto; }
-#title .diff .opt:hover { opacity: 0.7; }
+#title .diff .opt:hover { opacity: 0.8; }
+#title .diff .opt:not(.on):hover .u { opacity: 0.35; transform: scaleX(0.7); }
 #title .diff .opt.on { opacity: 0.95; }
 #title .diff .opt .k { height: min(4vh, 34px); width: auto; }
 #title .diff .opt .l { height: min(2.3vh, 19px); width: auto; }
@@ -173,12 +177,12 @@ const PROMPTS: Record<EndKind, string> = {
   victory: "Enter / click  ·  title",
 };
 const CONTROLS = [
-  "LMB  strike   ·   hold  charged cut",
-  "RMB  guard   ·   tap as it lands  deflect",
+  "LMB / J  strike   ·   hold  charged cut",
+  "RMB / K  guard   ·   tap as it lands  deflect",
+  "MMB / Q  lock on        mouse  look        WASD  move",
   "Shift  step   ·   hold  run   ·   into a thrust  mikiri",
-  "Space  jump   ·   again at him  kick",
-  "R  gourd        MMB / Q  lock on",
-  "A / D  or  1 2 3  difficulty",
+  "Space  jump   ·   again at him  kick        R  gourd",
+  "A / D  ·  1 2 3  ·  click  difficulty",
 ];
 const DIFFS: { id: DifficultyName; kanji: string; latin: string }[] = [
   { id: "easy", kanji: "易", latin: "Easy" },
@@ -248,7 +252,8 @@ export class Hud {
     tlImg.className = "t-latin";
     this.title.appendChild(tlImg);
     const titlePress = this.pressImg();
-    titlePress.src = this.smallURL("press any key");
+    titlePress.src = this.smallURL("press any key  ·  click to begin");
+    titlePress.classList.add("begin");
     this.title.appendChild(titlePress);
     const keys = el("div", "keys", this.title);
     CONTROLS.forEach((line, i) => {

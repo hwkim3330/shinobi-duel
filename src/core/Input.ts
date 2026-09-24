@@ -32,6 +32,8 @@ export class Input {
   /** Real-time clock (seconds), set by the game each frame; prompts are debounced with it. */
   realClock = 0;
   locked = false;
+  /** Clicks may take pointer lock (the fight only; menus keep a free cursor). */
+  lockable = false;
   private prompt: { keys: "any" | "menu"; at: number; stale: Set<string> } | null = null;
   private promptOut: PromptKey | null = null;
   /** Every fresh key press (menus that need more than a prompt: the title's difficulty choice). */
@@ -56,7 +58,7 @@ export class Input {
     window.addEventListener("blur", () => this.releaseAll());
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     window.addEventListener("mousedown", (e) => {
-      if (!this.locked) this.requestLock();
+      if (this.lockable && !this.locked) this.requestLock();
       const src = `Mouse${e.button}`;
       this.keys.add(src);
       this.promptPress(src);
@@ -240,6 +242,10 @@ export class Input {
     } catch {
       /* pointer lock unavailable (headless, iframe) */
     }
+  }
+
+  releaseLock(): void {
+    if (document.pointerLockElement) document.exitPointerLock();
   }
 
   axis(): { x: number; y: number } {
