@@ -5,7 +5,7 @@
  * Deflect rule (gameplay seconds, measured at the moment the general's swept blade first
  * touches the player's capsule):
  *   guard pressed in [contact - window, contact]                   → perfect deflect
- *   no press yet → held pending for DEFLECT_LATE; a press in time  → perfect deflect (late)
+ *   no press yet → held pending for DIFFICULTY.deflectLate; a press in time  → perfect deflect (late)
  *   guard held but pressed earlier than the window                 → regular block
  *   otherwise                                                      → hit
  * `window` is 0.2 s, shrunk by Input's anti-mash rule (never below 0.1 s).
@@ -41,16 +41,12 @@ import { Hud } from "../ui/Hud";
 import { Arena } from "../world/Arena";
 import { RIM, SUN_DIR, installFog } from "../world/materials";
 import { ATTACKS, BOSS_MAX, Boss, OPEN, type HitDef } from "./Boss";
-import { DIFFICULTY } from "./difficulty";
+import { applyDifficulty, DIFFICULTY, DIFFICULTY_NAMES, type DifficultyName, initialDifficulty, isDifficulty, rememberDifficulty } from "./difficulty";
 import { CameraRig } from "./CameraRig";
 import { KICK_REACH, PLAYER_MAX, Player, vitalityRegen } from "./Player";
 
-export const DEFLECT_EARLY = DIFFICULTY.deflectEarly;
-export const DEFLECT_LATE = DIFFICULTY.deflectLate;
 export const HITSTOP_DEFLECT = 0.07;
 export const HITSTOP_BLOCK = 0.04;
-/** Posture a perfect deflect deals to the general (before the chain bonus). */
-export const DEFLECT_POSTURE = DIFFICULTY.deflectPosture;
 /** Consecutive deflects (each within DEFLECT_CHAIN_GAP of the last) deal more posture. */
 export const DEFLECT_CHAIN_GAP = 1.0;
 export const MIKIRI_POSTURE = 14;
@@ -62,7 +58,7 @@ const DEATHBLOW_RANGE = 3.6;
 const DEATH_BEAT = 1.3;
 
 export function deflectPosture(h: HitDef, chain: number): number {
-  return DEFLECT_POSTURE * (1 + 0.12 * Math.min(chain, 4)) * (h.heavy ? 1.15 : 1);
+  return DIFFICULTY.deflectPosture * (1 + 0.12 * Math.min(chain, 4)) * (h.heavy ? 1.15 : 1);
 }
 
 type GState = "title" | "fight" | "deathblow" | "finisher" | "victory" | "dying" | "defeat";
@@ -160,6 +156,8 @@ export class Game {
   endT = 0;
   /** Fights begun (title / restart / tests): the death-loop repro counts these. */
   fightsStarted = 0;
+  /** The title's choice; loaded into DIFFICULTY only when a fight starts (restarts keep it). */
+  difficulty: DifficultyName = initialDifficulty();
   private promptShown = false;
   private desatTarget = 0;
   private barsTarget = 0;
@@ -231,6 +229,11 @@ export class Game {
     this.post = new Post(this.renderer, this.scene, this.camera, this.arena.surround.sunMesh);
     this.hud = new Hud(hudRoot);
     this.input = new Input(canvas);
+    this.hud.setDifficulty(this.difficulty);
+    this.hud.onDifficultyPick = (d) => {
+      if (this.state === "title") this.setDifficulty(d, true);
+    };
+    this.input.onKeyDown = (code) => this.titleKey(code);
     this.loop = new Loop(
       (dt) => this.fixed(dt),
       (dt, alpha) => this.frame(dt, true, alpha),
@@ -391,11 +394,36 @@ export class Game {
     this.input.armPrompt("any", 0.3);
   }
 
+  /** Choose the difficulty for the next fight (the title's selector, tests). */
+  setDifficulty(d: DifficultyName, remember = false): void {
+    if (!isDifficulty(d)) return;
+    this.difficulty = d;
+    this.hud.setDifficulty(d);
+    if (remember) rememberDifficulty(d);
+  }
+
+  /** Title selector keys: A / D or the arrows step, 1 / 2 / 3 pick (Input keeps them out of "any key"). */
+  private titleKey(code: string): void {
+    if (this.state !== "title") return;
+    const i = DIFFICULTY_NAMES.indexOf(this.difficulty);
+    const n = DIFFICULTY_NAMES.length;
+    let j = -1;
+    if (code === "KeyA" || code === "ArrowLeft") j = Math.max(0, i - 1);
+    else if (code === "KeyD" || code === "ArrowRight") j = Math.min(n - 1, i + 1);
+    else {
+      const m = /^(?:Digit|Numpad)([1-9])$/.exec(code);
+      if (m && +m[1] <= n) j = +m[1] - 1;
+    }
+    if (j >= 0 && j !== i) this.setDifficulty(DIFFICULTY_NAMES[j], true);
+  }
+
   /** Title / defeat → the fight, opening with the general's leap straight off the keypress. */
   private beginIntro(): void {
     this.fightsStarted++;
     this.audio.start();
     this.audio.uiStart();
+    applyDifficulty(this.difficulty);
+    this.hud.fightDifficulty(this.difficulty);
     this.resetActors();
     this.go("fight");
     this.hud.showTitle(false);
@@ -411,6 +439,8 @@ export class Game {
   /** Skip the title and begin the fight immediately (tests). */
   startFight(): void {
     this.fightsStarted++;
+    applyDifficulty(this.difficulty);
+    this.hud.fightDifficulty(this.difficulty);
     this.resetActors();
     this.go("fight");
     this.hud.showTitle(false);
@@ -559,7 +589,7 @@ export class Game {
         this.pending = null;
         this.stats.lateDeflects++;
         this.perfect(h, -late);
-      } else if (this.gameTime - this.pending.t > DEFLECT_LATE) {
+      } else if (this.gameTime - this.pending.t > DIFFICULTY.deflectLate) {
         const h = this.pending.h;
         this.contact.copy(this.pending.at);
         this.boss.ch.rig.root.localToWorld(this.contact);
@@ -867,7 +897,7 @@ export class Game {
     const inp = this.input;
     if (p.canGuard) {
       const pt = inp.peekPressTime("block");
-      if (pt !== undefined && this.gameTime - pt <= Math.min(DEFLECT_EARLY, inp.deflectWindow)) return this.perfect(h, this.gameTime - pt);
+      if (pt !== undefined && this.gameTime - pt <= Math.min(DIFFICULTY.deflectEarly, inp.deflectWindow)) return this.perfect(h, this.gameTime - pt);
       // A thrust goes straight through a raised guard (only a deflect turns it); in the air only
       // a deflect works too.
       if (inp.isHeld("block") && !h.perilous && !p.airborne) return this.regular(h);

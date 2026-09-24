@@ -5,6 +5,7 @@
  * and end screens use generated brush lettering.
  */
 import { rng } from "../core/math";
+import type { DifficultyName } from "../game/difficulty";
 import { brushStroke, brushText, KANJI_FONT, LATIN_FONT } from "./brush";
 
 const CSS = /* css */ `
@@ -22,6 +23,17 @@ const CSS = /* css */ `
 #title .keys { position: absolute; left: 4vw; bottom: 7vh; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; opacity: 0.72; width: max-content; }
 #title .keys img { height: min(2.6vh, 22px); width: auto; flex: none; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.9)); }
 @keyframes breathe { 0%,100% { opacity: 0.35 } 50% { opacity: 0.85 } }
+/* difficulty: three brushed choices, the chosen one underlined in crimson ink */
+#title .diff { position: absolute; left: 50%; bottom: 8.5vh; transform: translateX(-50%); display: flex; align-items: flex-end; gap: min(3.2vw, 44px); }
+#title .diff .opt { position: relative; display: flex; align-items: center; gap: 6px; padding: 4px 6px 12px; opacity: 0.5; cursor: pointer; transition: opacity 0.25s ease; filter: drop-shadow(0 1px 4px rgba(0,0,0,0.85)); }
+#title:not(.hidden) .diff .opt { pointer-events: auto; }
+#title .diff .opt:hover { opacity: 0.7; }
+#title .diff .opt.on { opacity: 0.95; }
+#title .diff .opt .k { height: min(4vh, 34px); width: auto; }
+#title .diff .opt .l { height: min(2.3vh, 19px); width: auto; }
+#title .diff .opt .u { position: absolute; left: -4%; bottom: 0; width: 108%; height: 10px; opacity: 0; transform: scaleX(0.4); transform-origin: left center; transition: opacity 0.2s ease, transform 0.3s cubic-bezier(.5,.05,.3,1); }
+#title .diff .opt.on .u { opacity: 0.9; transform: scaleX(1); }
+#playerbar .diffmark { height: 17px; width: auto; opacity: 0.45; margin-left: 2px; }
 /* boss */
 #bossbar { position: absolute; left: 50%; bottom: 5.2vh; transform: translateX(-50%); width: min(44vw, 640px); display: flex; flex-direction: column; align-items: center; }
 #bossbar .name { height: 58px; width: auto; margin-bottom: 2px; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.9)); }
@@ -166,6 +178,12 @@ const CONTROLS = [
   "Shift  step   ·   hold  run   ·   into a thrust  mikiri",
   "Space  jump   ·   again at him  kick",
   "R  gourd        MMB / Q  lock on",
+  "A / D  or  1 2 3  difficulty",
+];
+const DIFFS: { id: DifficultyName; kanji: string; latin: string }[] = [
+  { id: "easy", kanji: "易", latin: "Easy" },
+  { id: "medium", kanji: "中", latin: "Medium" },
+  { id: "hard", kanji: "難", latin: "Hard" },
 ];
 
 export class Hud {
@@ -200,6 +218,11 @@ export class Hud {
   private shownRez = -1;
   private readonly kanjiCache = new Map<string, string>();
   private readonly latinCache = new Map<string, string>();
+  private readonly diffEls = new Map<DifficultyName, HTMLElement>();
+  private readonly diffMarks = new Map<DifficultyName, string>();
+  private readonly diffMark: HTMLImageElement;
+  /** A difficulty clicked on the title. */
+  onDifficultyPick: ((d: DifficultyName) => void) | null = null;
 
   constructor(root: HTMLElement) {
     const style = document.createElement("style");
@@ -232,6 +255,29 @@ export class Hud {
       const img = new Image();
       img.src = brushText(line, { size: 26, font: LATIN_FONT, weight: 400, color: "#e8dfd0", seed: 40 + i, dry: 0.25, splatter: 0, letterSpacing: 0.08, pad: 4 }).toDataURL();
       keys.appendChild(img);
+    });
+    const diff = el("div", "diff", this.title);
+    DIFFS.forEach((d, i) => {
+      const opt = el("div", "opt", diff);
+      opt.dataset.difficulty = d.id;
+      const k = new Image();
+      k.className = "k";
+      k.src = brushText(d.kanji, { size: 64, color: "#f1ebe0", seed: 50 + i, dry: 0.6, splatter: 0.15, pad: 6 }).toDataURL();
+      const l = new Image();
+      l.className = "l";
+      l.src = brushText(d.latin, { size: 28, font: LATIN_FONT, weight: 600, color: "#ece3d4", seed: 55 + i, dry: 0.3, splatter: 0, letterSpacing: 0.14, pad: 4 }).toDataURL();
+      const u = new Image();
+      u.className = "u";
+      u.src = brushStroke(240, 18, "#a8231a", 60 + i).toDataURL();
+      opt.append(k, l, u);
+      // Swallow the press so the title's "any key" prompt never sees it.
+      opt.addEventListener("mousedown", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (e.button === 0) this.onDifficultyPick?.(d.id);
+      });
+      this.diffEls.set(d.id, opt);
+      this.diffMarks.set(d.id, k.src);
     });
 
     // ---------------------------------------------------------------- fight HUD
@@ -280,6 +326,9 @@ export class Hud {
     gi.src = gourdIcon();
     this.gourdEl.appendChild(gi);
     this.gourdN = el("span", "", this.gourdEl);
+    this.diffMark = new Image();
+    this.diffMark.className = "diffmark";
+    row.appendChild(this.diffMark);
     const pp = bar(pb);
     pp.root.className = "posture";
     el("div", "tick", pp.root);
@@ -351,6 +400,18 @@ export class Hud {
 
   showFight(on: boolean): void {
     this.fight.classList.toggle("hidden", !on);
+  }
+
+  /** The title's highlighted choice. */
+  setDifficulty(d: DifficultyName): void {
+    for (const [id, e] of this.diffEls) e.classList.toggle("on", id === d);
+  }
+
+  /** The faint mark beside the gourd: the difficulty this fight runs on. */
+  fightDifficulty(d: DifficultyName): void {
+    const src = this.diffMarks.get(d) ?? "";
+    if (this.diffMark.src !== src) this.diffMark.src = src;
+    this.diffMark.dataset.difficulty = d;
   }
 
   private kanjiURL(text: string, color: string, seed: number): string {

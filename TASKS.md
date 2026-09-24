@@ -3,7 +3,8 @@
 Tools in `tools/` need the dev server running (`pnpm dev`, port 5411). `DUEL_VIEW=960x540` forces a
 small viewport on any gpu.mjs tool (light GPU load while the machine is shared). Test hooks:
 `window.__duel.game` (pause / step / startFight / forceBossAttack / forcePhase2 / place / input.promptPress),
-`window.__duel.rules` (the tuned constants).
+`window.__duel.rules` (the tuned constants, `DIFFICULTY_PRESETS`), `window.__duel.setDifficulty('easy'|'medium'|'hard')`
+(next fight), `window.__duel.difficulty()` → [chosen, running]; `?difficulty=` on the URL.
 
 ## Deploy (Sep 24, 20:10)
 - Repo: https://github.com/StarKnightt/shinobi-duel (public, default branch `main`, MIT; topics threejs,
@@ -144,6 +145,57 @@ mashing still loses (5/5 in fairness.mjs, dying in phase 2 at best).
   `playerDamage`, gourd punish after `healReact`, dodge i-frame probe 0.07 s before contact, guard
   break probe with the posture delay held off), fairness (casual profile, masher ≤ 1 lucky win in 5,
   the duel lasts > 25 s).
+
+## Difficulty choice (Easy / Medium / Hard) — done (Sep 24)
+Title selector under the lettering: 易 Easy · 中 Medium · 難 Hard, brush kanji + small latin, the choice
+underlined with a crimson brush stroke. A / D, ← / →, 1 2 3 (and numpad) or a click change it; those keys
+are in `NOT_ANY` and option clicks stop propagation, so changing it never starts the fight. Remembered in
+localStorage (`shinobi-duel.difficulty`); `?difficulty=` overrides without storing. Faint kanji beside
+the gourd in the fight HUD (`#playerbar .diffmark`).
+- Data only: `DIFFICULTY_PRESETS` in `src/game/difficulty.ts`, same knobs as `DIFFICULTY` (+ `gourdCharges`).
+  `Game.startFight` / `beginIntro` (title, restart after defeat) call `applyDifficulty(game.difficulty)`,
+  which copies the preset into `DIFFICULTY` in place (arrays / objects keep their references:
+  `Input.DEFLECT_STEPS` is the same array). Resurrection and every in-fight path never touch it.
+  Module-level copies of knobs (`DEFLECT_EARLY/LATE/POSTURE`, `POSTURE_REGEN`, `BOSS_REGEN`,
+  `HEAL_REACT`, `OPEN_HITS`, unused `PHASE2_TEMPO`) became live `DIFFICULTY.*` reads; `GOURD.charges` is a getter.
+
+| Knob | Easy | Medium (default) | Hard |
+|---|---|---|---|
+| deflect window early / late (s) | 0.3 / 0.07 | 0.25 / 0.06 | 0.2 / 0.05 |
+| mash steps (s) | 0.3/0.3/0.27/0.24/0.2 | 0.25/0.25/0.22/0.19/0.16 | 0.2/0.2/0.167/0.133/0.1 |
+| player damage × | 0.5 | 0.7 | 1 |
+| block posture share | 0.45 | 0.6 | 0.9 |
+| player posture regen /s | 22 | 18 | 13 |
+| deflect posture (base) | 13 | 12 | 5 |
+| cut posture open / armoured | 0.65 / 0.3 | 0.6 / 0.3 | 0.5 / 0.25 |
+| boss posture regen /s | 8 | 9 | 13 |
+| open after attack p1 / p2 (s) | 1.05 / 0.85 | 0.85 / 0.65 | 0 / 0 |
+| guard slip 1st / 2nd cut | 0.4 / 0.25 | 0.35 / 0.2 | 0 / 0 |
+| he deflects cut 3 / 4 / 5+ | 0.08 / 0.25 / 0.5 | 0.15 / 0.4 / 0.7 | 0.3 / 0.65 / 1 |
+| counter delay (s) / flurry share | 0.6 / 0.35 | 0.45 / 0.5 | 0 / 1 |
+| cuts per opening | 3 | 3 | 2 |
+| deflected recoil (s) | 1.05 | 0.95 | 0.9 |
+| idle gap p1 / p2 (base + rand, s) | 0.8+1.0 / 0.5+0.7 | 0.6+0.8 / 0.35+0.55 | 0.35+0.6 / 0.15+0.35 |
+| tempo p1 / p2 | 1 / 1 | 1 / 1.02 | 1 / 1.12 |
+| perilous picks p1 (thrust+sweep+grab) | 0.25 | 0.32 | 0.30 |
+| perilous picks p2 / flurry | 0.31 / 0.07 | 0.40 / 0.10 | 0.32 / 0.22 |
+| gourd punish react (s) / close start | 0.5 / 0 | 0.4 / 0 | 0.22 / 0.18 |
+| gourd charges | 4 | 3 | 3 |
+
+Hard = the bracketed pre-easing values; the old mid-range pick table wasn't recorded, so Hard's picks are
+rebuilt from the notes (phase-2 flurry 22 %, comboDelay 14 %).
+
+### Verification (Sep 24, dev server, 0 console errors everywhere)
+- `pnpm build` clean; mech ALL PASS, combat 19/19, deathloop ALL PASS, skin-smoke 14/14 (Medium, default).
+- bot.mjs (1600×900): Medium 10 deflects / 2 mikiri / VICTORY 30.8 s; Easy 9 / 2 / VICTORY 31.8 s; Hard
+  16 / 4 / VICTORY 41 s; all with sweep jumped, 1 heal, 2 deathblows, 0 hits.
+- fairness.mjs: Medium unchanged (ALL PASS). Easy: perfect 26.3 s, learner 1st try, casual 1st try (3/3),
+  masher wins 3/5 (its "mostly loses" check fails on Easy, by design of an easy mode). Hard: perfect
+  35.5-38.5 s, learner 1st try (46-68 s), casual 1st try, masher 5/5 losses in phase 1.
+- `node tools/difficulty.mjs` (new): 20/20 — keys and clicks change the choice without starting, reload
+  keeps it, three die → resurrect → defeat → restart rounds keep Easy (gourd 4, 1 fight per restart),
+  Esc → title → new choice applies to the next fight only, the hook and `?difficulty=`.
+- perf.mjs: 198.5 fps vs 199.5 on HEAD (headless cap).
 
 ## Game-feel pass (restrained)
 - Near-miss: a dodge whose i-frames carry her through a live blade (any blow, the sweep) → 0.13 s

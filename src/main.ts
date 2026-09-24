@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { loadBodies } from "./chars/loadBodies";
-import { DIFFICULTY } from "./game/difficulty";
+import { activeDifficulty, DIFFICULTY, DIFFICULTY_PRESETS, type DifficultyName } from "./game/difficulty";
 import { Input } from "./core/Input";
-import { DEFLECT_POSTURE, deflectPosture, Game, KICK_HEAD_POSTURE, MIKIRI_POSTURE } from "./game/Game";
+import { deflectPosture, Game, KICK_HEAD_POSTURE, MIKIRI_POSTURE } from "./game/Game";
 import { GOURD, REZ } from "./game/Player";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -142,7 +142,23 @@ window.__duel = {
   ready: false,
   game,
   stats,
-  rules: { DIFFICULTY, DEFLECT_POSTURE, deflectPosture, MIKIRI_POSTURE, KICK_HEAD_POSTURE, GOURD, REZ, DEFLECT_STEPS: Input.DEFLECT_STEPS, MASH_RESET: Input.MASH_RESET },
+  rules: {
+    DIFFICULTY,
+    DIFFICULTY_PRESETS,
+    get DEFLECT_POSTURE() {
+      return DIFFICULTY.deflectPosture;
+    },
+    deflectPosture,
+    MIKIRI_POSTURE,
+    KICK_HEAD_POSTURE,
+    GOURD,
+    REZ,
+    DEFLECT_STEPS: Input.DEFLECT_STEPS,
+    MASH_RESET: Input.MASH_RESET,
+  },
+  /** Difficulty for the next fight ('easy' | 'medium' | 'hard'); `difficulty()` → [chosen, running]. */
+  setDifficulty: (d: DifficultyName) => game.setDifficulty(d),
+  difficulty: () => [game.difficulty, activeDifficulty()],
   scene,
   step: (s: number) => game.step(s),
   pause: () => game.pause(),

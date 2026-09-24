@@ -13,8 +13,11 @@ import { DIFFICULTY } from "../game/difficulty";
 export type Action = "attack" | "block" | "dodge" | "jump" | "lock" | "heal";
 export type PromptKey = "confirm" | "back";
 
-/** Keys that never count as "any key": mute (M), modifiers, OS / lock keys, function keys. */
-const NOT_ANY = /^(KeyM|Shift(Left|Right)|Control(Left|Right)|Alt(Left|Right)|Meta(Left|Right)|OS(Left|Right)|CapsLock|NumLock|ScrollLock|ContextMenu|Tab|PrintScreen|F\d+)$/;
+/**
+ * Keys that never count as "any key": mute (M), the title's difficulty keys (A / D, arrows,
+ * 1-3), modifiers, OS / lock keys, function keys.
+ */
+const NOT_ANY = /^(KeyM|Key[AD]|Arrow(Left|Right)|(Digit|Numpad)[1-3]|Shift(Left|Right)|Control(Left|Right)|Alt(Left|Right)|Meta(Left|Right)|OS(Left|Right)|CapsLock|NumLock|ScrollLock|ContextMenu|Tab|PrintScreen|F\d+)$/;
 const MOUSE_ACTION: Record<number, Action | undefined> = { 0: "attack", 1: "lock", 2: "block" };
 
 export class Input {
@@ -31,12 +34,15 @@ export class Input {
   locked = false;
   private prompt: { keys: "any" | "menu"; at: number; stale: Set<string> } | null = null;
   private promptOut: PromptKey | null = null;
+  /** Every fresh key press (menus that need more than a prompt: the title's difficulty choice). */
+  onKeyDown: ((code: string) => void) | null = null;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", (e) => {
       if (e.code === "Space" || e.code === "Tab") e.preventDefault();
       if (e.repeat) return;
       this.keys.add(e.code);
+      this.onKeyDown?.(e.code);
       this.promptPress(e.code);
       const a = this.keyAction(e.code);
       if (a) this.press(a, e.code);

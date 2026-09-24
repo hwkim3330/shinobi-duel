@@ -188,19 +188,12 @@ export type BState =
 export const OPEN: ReadonlySet<BState> = new Set<BState>(["recoil", "flinch", "recover", "whiff", "mikiried", "kicked"]);
 
 export const BOSS_MAX = { health: 100, posture: 100, markers: 2 };
-/** Posture regen per second at full vitality (enemies have no regen delay, none while attacking). */
-const BOSS_REGEN = DIFFICULTY.bossRegen;
-/** Phase-2 attacks play this much faster. */
-export const PHASE2_TEMPO = DIFFICULTY.tempo[1];
 /** Seconds the deathblow stays available after a break. */
 export const DEATHBLOW_WINDOW = 4.0;
-/** Seconds he takes to react to the gourd from range; inside HEAL_CLOSE he reacts at once. */
-const HEAL_REACT = DIFFICULTY.healReact;
+/** Inside HEAL_CLOSE he reacts to the gourd at once (from range after DIFFICULTY.healReact). */
 const HEAL_CLOSE = 2.6;
 /** Rising for the second life takes this long (he is back on the player within ~1.5-2 s). */
 const RISE_T = 1.6;
-/** Cuts he takes in one opening before breaking out of it. */
-const OPEN_HITS = DIFFICULTY.openHits;
 
 /** What the general can see of the player this step (set by the game). */
 export interface PlayerSense {
@@ -247,7 +240,7 @@ export class Boss {
   /** Animation / attack tempo of this step (phase 2 attacks run faster). */
   tempo = 1;
   private time = 0;
-  /** Cuts taken in the current opening: after OPEN_HITS he breaks out of it. */
+  /** Cuts taken in the current opening: after DIFFICULTY.openHits he breaks out of it. */
   private openHits = 0;
   /** How long the current `recover` opening lasts. */
   private recoverFor = 0.6;
@@ -423,7 +416,7 @@ export class Boss {
     const noRegen =
       s0 === "attack" || s0 === "stagger" || s0 === "mikiried" || s0 === "kicked" || s0 === "finished" || s0 === "deathblown" || s0 === "rise" || s0 === "throw" || s0 === "dead";
     if (!noRegen && this.postureIdle > 0.25) {
-      this.posture = Math.max(0, this.posture - dt * BOSS_REGEN * vitalityRegen(this.health / BOSS_MAX.health));
+      this.posture = Math.max(0, this.posture - dt * DIFFICULTY.bossRegen * vitalityRegen(this.health / BOSS_MAX.health));
     }
     const sense = this.sense;
     const down = playerDown || sense.down;
@@ -465,7 +458,7 @@ export class Boss {
           if (sense.healing && !this.punishedHeal) {
             this.healSeen += dt;
             const close = dist < HEAL_CLOSE;
-            if (close || this.healSeen >= HEAL_REACT) {
+            if (close || this.healSeen >= DIFFICULTY.healReact) {
               this.punishedHeal = true;
               // In his face: a cut straight from the guard that lands before the swallow.
               if (close) this.startAttack("combo", DIFFICULTY.healCloseStart);
@@ -706,7 +699,7 @@ export class Boss {
    */
   cutInOpening(): boolean {
     this.openHits++;
-    if (this.openHits < OPEN_HITS || this.state === "stagger") return false;
+    if (this.openHits < DIFFICULTY.openHits || this.state === "stagger") return false;
     this.openHits = 0;
     if (this.phase === 2) {
       const q = this.queue[0];

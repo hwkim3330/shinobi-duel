@@ -66,7 +66,13 @@ const GUARD_FACE = 8;
 
 export const PLAYER_MAX = { health: 100, posture: 100 };
 /** Healing gourd: charges per fight (not refilled by resurrection), share of max vitality per sip, seconds it takes. */
-export const GOURD = { charges: 3, heal: 0.45, over: 0.35 };
+export const GOURD = {
+  get charges(): number {
+    return DIFFICULTY.gourdCharges;
+  },
+  heal: 0.45,
+  over: 0.35,
+};
 /** Resurrections per fight, and the vitality share you rise with. */
 export const REZ = { charges: 1, health: 0.5 };
 /** Guard can be raised again this far into a hit reaction. */
@@ -77,8 +83,7 @@ const REVIVE_GRACE = 0.6;
 /** How long a press waits to fire when the player is busy (recovery, hitstun, a swing). */
 export const BUFFER = { attack: 0.35, dodge: 0.3, jump: 0.25, heal: 0.3, block: 0.12 };
 
-/** Posture regen per second (after POSTURE_DELAY without posture damage). */
-const POSTURE_REGEN = DIFFICULTY.playerPostureRegen;
+/** Posture regen (DIFFICULTY.playerPostureRegen per second) starts after POSTURE_DELAY without posture damage. */
 const POSTURE_DELAY = 1.0;
 /** Holding guard greatly speeds posture recovery. */
 const GUARD_REGEN = 2.5;
@@ -220,7 +225,7 @@ export class Player {
     const noRegen = s === "attack" || s === "airAttack" || s === "guardbreak" || s === "thrown" || s === "dead" || s === "hit" || this.running;
     if (this.postureIdle > POSTURE_DELAY && !noRegen) {
       const k = (this.guarding ? GUARD_REGEN : 1) * vitalityRegen(this.health / PLAYER_MAX.health);
-      this.posture = Math.max(0, this.posture - dt * POSTURE_REGEN * k);
+      this.posture = Math.max(0, this.posture - dt * DIFFICULTY.playerPostureRegen * k);
     }
     if (this.healLeft > 0 && s !== "dead") {
       const d = Math.min(this.healLeft, (dt * GOURD.heal * PLAYER_MAX.health) / GOURD.over);

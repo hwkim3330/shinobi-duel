@@ -44,6 +44,7 @@ The build uses a relative base, so `dist/` works from any static host or sub-pat
 | R | Drink from the healing gourd |
 | Middle mouse / Q / Tab | Lock on, or unlock and re-centre the camera behind her |
 | M | Mute (remembered) |
+| A / D, ← / →, 1 2 3, click | Choose the difficulty on the title: 易 Easy · 中 Medium · 難 Hard (remembered) |
 | Enter / E / Space / click | Confirm on the title and end screens; Esc / Backspace goes back |
 
 The title shows the same list in ink. Nothing else is on screen outside the fight HUD.
@@ -53,6 +54,7 @@ The title shows the same list in ink. Nothing else is on screen outside the figh
 | `chars=procedural` | Use the code-built fighters instead of the Mixamo bodies |
 | `debug=anim` | In-game clip inspector: scrub clips, see their event bands, copy the events |
 | `audio=off` | No sound at all (for A/B performance runs) |
+| `difficulty=easy` / `medium` / `hard` | Start on that difficulty (overrides the remembered choice without replacing it) |
 
 ## The fight
 
@@ -66,17 +68,23 @@ The title shows the same list in ink. Nothing else is on screen outside the figh
   grab). The second deathblow is the finisher, played as a letterboxed cinematic.
 - **Resurrection.** Die once and you can rise on the spot at half vitality; he keeps the damage you
   did. Die again and it is over.
-- **Healing gourd.** Three swallows, 45 % each, not refilled by resurrection. He sees you drink and
+- **Healing gourd.** Three swallows (four on Easy), 45 % each, not refilled by resurrection. He sees you drink and
   punishes it: point blank at once, from range after a beat.
 - **Three perilous attacks.** A red 危 flashes over her head before each. The *thrust* can't be
   guarded; deflect it, sidestep it, or step into it for a **mikiri counter** that stamps his blade
   into the roof. The *sweep* has to be jumped (and a second jump kicks off his head for heavy
   posture). The *grab* can only be dodged or jumped, and leaves him open.
+- **Three difficulties.** Picked on the title under the brush lettering. *Medium* is the default
+  tuning. *Easy* widens the deflect window to 0.3 s, halves the damage you take, leaves him open
+  longer, counters and uses perilous attacks less, breaks faster and gives four swallows. *Hard* is
+  the original, pre-easing general: a 0.2 s window, full damage, no free openings, a faster second
+  phase. The choice sticks between visits, holds through deaths and restarts, and a faint 易 / 中 /
+  難 beside the gourd shows which one you are fighting.
 - **Lock-on.** The camera frames both fighters; unlocking re-centres it behind her. The guard turns
   to face him within eight metres either way.
 - **Fair, and tested for it.** A simulated "learner" who is 55 ms off on every reaction and misses
-  one blow in eight wins on the first or second try; a masher who spams attack and guard loses five
-  times out of five.
+  one blow in eight wins on the first or second try, on every difficulty; a masher who spams attack
+  and guard loses five times out of five on Medium and Hard (on Easy mashing can get through).
 
 ![A perilous thrust: the red 危 over her head as the general lunges](media/02-perilous.jpg)
 
@@ -117,14 +125,16 @@ shrinks the viewport.
 | `node tools/mech.mjs` | 51 deterministic mechanics checks: input, movement, camera, the deflect window and anti-mash, mikiri, sweep and kick, grab, gourd and punish, deathblows, regen tables, cancels, death flow |
 | `node tools/combat.mjs` | 19 sword-fight glitch repros, one per bug fixed in the combat pass (floating sparks, blades through bodies, lunges overshooting…) |
 | `node tools/deathloop.mjs` | Real keyboard and mouse events through three rounds of die, resurrect, die, defeat and restart |
-| `node tools/fairness.mjs` | Simulated players: a frame-perfect bot, a learner, a casual player and a masher |
+| `node tools/fairness.mjs` | Simulated players: a frame-perfect bot, a learner, a casual player and a masher (add `?difficulty=` to `DUEL_URL` for the other presets) |
+| `node tools/difficulty.mjs` | The title's difficulty choice with real keys and clicks: never starts the fight, remembered, kept through three rounds of die, resurrect, defeat and restart |
 | `node tools/soak.mjs [secs]` | Five bot fights back to back, random-input fuzz, resource growth, hitches, tab switches, resizes |
 | `node tools/perf.mjs` | Frame rate and first-use shader compiles |
 | `node tools/shoot.mjs`, `tools/og.mjs` | Screenshots of named set pieces; `og.mjs` renders the images in this README |
 | `node tools/audio-render.mjs` | Renders ~50 sounds offline through the real mix; fails on clipping, NaN or silence |
 
 `window.__duel` exposes the hooks they use: `game` (pause, step, startFight, forceBossAttack,
-place…), `rules` (the tuned constants) and `scene(name)` for deterministic set pieces.
+place…), `rules` (the tuned constants), `setDifficulty('easy' | 'medium' | 'hard')` (applies from
+the next fight) and `scene(name)` for deterministic set pieces.
 
 ## Performance
 
