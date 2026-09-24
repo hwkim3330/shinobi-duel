@@ -1,0 +1,420 @@
+{
+ "_doc": "Slot -> source-clip regexes for build_char.py. Source names are file basenames (Mixamo) or animation names (UAL), lower case, '_' -> ' '. First unused match wins; reused if every match is taken. Slot names are the asset clip names in src/chars/skinnedConfig.ts.",
+ "mixamo": {
+  "player": {
+   "model": "kachujin|rosales",
+   "clips": {
+    "idle": [
+     "^great sword idle$",
+     "sword idle",
+     "idle"
+    ],
+    "walk": [
+     "^great sword walk$",
+     "sword walk(?!.*back)",
+     "^walk"
+    ],
+    "walk_back": [
+     "walk.*back|back.*walk|backward"
+    ],
+    "strafe_left": [
+     "strafe.*left|left.*strafe",
+     "^great sword strafe$"
+    ],
+    "strafe_right": [
+     "strafe.*right|right.*strafe",
+     "^great sword strafe \\(2\\)$"
+    ],
+    "run": [
+     "^great sword run$",
+     "sword run",
+     "\\brun"
+    ],
+    "block": [
+     "^great sword blocking$",
+     "blocking$",
+     "block"
+    ],
+    "block_impact": [
+     "^great sword blocking \\(2\\)$",
+     "block.*(impact|hit|react)",
+     "blocking \\(\\d\\)",
+     "^great sword impact$",
+     "block"
+    ],
+    "dodge": [
+     "roll",
+     "dodge",
+     "evade",
+     "dive"
+    ],
+    "attack1": [
+     "^great sword slash$",
+     "slash"
+    ],
+    "attack2": [
+     "^great sword slash \\(2\\)$",
+     "slash"
+    ],
+    "attack3": [
+     "^great sword slash \\(3\\)$",
+     "slash"
+    ],
+    "attack_charged": [
+     "^spin attack$",
+     "high spin",
+     "power",
+     "heavy",
+     "^great sword slash \\(4\\)$",
+     "slash"
+    ],
+    "jump_attack": [
+     "jump attack",
+     "^great sword slash \\(5\\)$"
+    ],
+    "hit": [
+     "^great sword impact$",
+     "impact",
+     "hit",
+     "react"
+    ],
+    "stagger": [
+     "stagger",
+     "stumble",
+     "impact \\(\\d\\)",
+     "impact"
+    ],
+    "death": [
+     "^great sword death$",
+     "death",
+     "dying"
+    ],
+    "jump": [
+     "^great sword jump$",
+     "jump(?! attack)"
+    ],
+    "finisher": [
+     "stab",
+     "thrust",
+     "impale"
+    ],
+    "deathblow": [
+     "stab \\(2\\)",
+     "stab",
+     "thrust",
+     "^finisher$"
+    ],
+    "kick": [
+     "kick"
+    ],
+    "drink": [
+     "drink",
+     "^heal$",
+     "heal"
+    ],
+    "mikiri": [
+     "^dodge forward$",
+     "stomp",
+     "mikiri",
+     "forward roll",
+     "^roll$",
+     "roll"
+    ],
+    "get_up": [
+     "^getup$",
+     "get ?up",
+     "get(ting)? up",
+     "stand(ing)? up"
+    ],
+    "thrown": [
+     "knock",
+     "thrown",
+     "flying back",
+     "falling back",
+     "knockdown",
+     "knocked"
+    ]
+   }
+  },
+  "boss": {
+   "model": "paladin|nordstrom|vanguard|knight|warrior|brute|armou?r|guard",
+   "clips": {
+    "idle": [
+     "^great sword idle$",
+     "sword idle",
+     "idle"
+    ],
+    "walk": [
+     "^great sword walk$",
+     "sword walk(?!.*back)",
+     "^walk"
+    ],
+    "walk_back": [
+     "walk.*back|back.*walk|backward"
+    ],
+    "strafe_left": [
+     "strafe.*left|left.*strafe",
+     "^great sword strafe$"
+    ],
+    "strafe_right": [
+     "strafe.*right|right.*strafe",
+     "^great sword strafe \\(2\\)$"
+    ],
+    "block": [
+     "^great sword blocking$",
+     "blocking$",
+     "block"
+    ],
+    "block_impact": [
+     "^great sword blocking \\(2\\)$",
+     "block.*(impact|hit|react)",
+     "blocking \\(\\d\\)",
+     "^great sword impact$",
+     "block"
+    ],
+    "attack1": [
+     "^great sword slash$",
+     "slash"
+    ],
+    "combo2": [
+     "^great sword slash \\(2\\)$",
+     "slash"
+    ],
+    "combo3": [
+     "^great sword slash \\(3\\)$",
+     "slash"
+    ],
+    "overhead": [
+     "overhead",
+     "downward",
+     "vertical",
+     "high spin",
+     "^great sword slash \\(4\\)$",
+     "slash"
+    ],
+    "thrust": [
+     "thrust",
+     "stab",
+     "lunge",
+     "impale"
+    ],
+    "leap": [
+     "jump attack",
+     "leap"
+    ],
+    "sweep": [
+     "sweep",
+     "low",
+     "spin",
+     "^great sword slash \\(5\\)$",
+     "slash"
+    ],
+    "grab": [
+     "grab",
+     "punch",
+     "kick"
+    ],
+    "grab_throw": [
+     "^grab$"
+    ],
+    "hit": [
+     "^great sword impact$",
+     "impact",
+     "hit",
+     "react"
+    ],
+    "stumble": [
+     "^hit heavy$",
+     "stumble",
+     "impact \\(\\d\\)",
+     "impact"
+    ],
+    "stagger": [
+     "kneel",
+     "stagger",
+     "impact"
+    ],
+    "finished": [
+     "^great sword death$",
+     "death",
+     "dying"
+    ],
+    "get_up": [
+     "^getup$",
+     "get ?up",
+     "get(ting)? up",
+     "stand(ing)? up"
+    ]
+   },
+   "look": {
+    "*": {
+     "tint": [
+      0.42,
+      0.36,
+      0.34
+     ],
+     "rough": 0.38,
+     "metal": 0.15
+    }
+   }
+  }
+ },
+ "ual": {
+  "player": {
+   "model": "assets/source/ubc/Universal_Base_CharactersStandard/Universal Base Characters[Standard]/Base Characters/Godot - UE/Superhero_Female_FullBody.gltf",
+   "anims": [
+    "assets/source/ual1/Universal_Animation_LibraryStandard/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb",
+    "assets/source/ual2/Universal_Animation_Library_2Standard/Universal Animation Library 2[Standard]/Unreal-Godot/UAL2_Standard.glb"
+   ],
+   "clips": {
+    "idle": [
+     "^sword idle$"
+    ],
+    "walk": [
+     "^walk loop$"
+    ],
+    "run": [
+     "^jog fwd loop$"
+    ],
+    "block": [
+     "^sword block$"
+    ],
+    "block_impact": [
+     "^sword block$"
+    ],
+    "dodge": [
+     "^roll$"
+    ],
+    "attack1": [
+     "^sword regular a$"
+    ],
+    "attack2": [
+     "^sword regular b$"
+    ],
+    "attack3": [
+     "^sword attack$"
+    ],
+    "attack_charged": [
+     "^sword regular c$"
+    ],
+    "jump_attack": [
+     "^sword attack$"
+    ],
+    "hit": [
+     "^hit chest$"
+    ],
+    "stagger": [
+     "^hit knockback$"
+    ],
+    "death": [
+     "^death01$"
+    ],
+    "jump": [
+     "^ninjajump start$"
+    ],
+    "finisher": [
+     "^sword dash$"
+    ],
+    "deathblow": [
+     "^sword dash$"
+    ],
+    "kick": [
+     "^melee hook$"
+    ],
+    "drink": [
+     "^consume$"
+    ],
+    "get_up": [
+     "^laytoidle$"
+    ],
+    "thrown": [
+     "^death01$"
+    ]
+   },
+   "look": {
+    "*": {
+     "tint": [
+      0.36,
+      0.32,
+      0.3
+     ],
+     "rough": 0.8
+    }
+   }
+  },
+  "boss": {
+   "model": "assets/source/ubc/Universal_Base_CharactersStandard/Universal Base Characters[Standard]/Base Characters/Godot - UE/Superhero_Male_FullBody.gltf",
+   "anims": [
+    "assets/source/ual1/Universal_Animation_LibraryStandard/Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb",
+    "assets/source/ual2/Universal_Animation_Library_2Standard/Universal Animation Library 2[Standard]/Unreal-Godot/UAL2_Standard.glb"
+   ],
+   "clips": {
+    "idle": [
+     "^sword idle$"
+    ],
+    "walk": [
+     "^walk loop$"
+    ],
+    "block": [
+     "^sword block$"
+    ],
+    "block_impact": [
+     "^sword block$"
+    ],
+    "attack1": [
+     "^sword regular a$"
+    ],
+    "combo2": [
+     "^sword regular b$"
+    ],
+    "combo3": [
+     "^sword regular c$"
+    ],
+    "overhead": [
+     "^sword attack$"
+    ],
+    "thrust": [
+     "^sword dash$"
+    ],
+    "leap": [
+     "^ninjajump start$"
+    ],
+    "sweep": [
+     "^sword regular a$"
+    ],
+    "grab": [
+     "^melee hook$"
+    ],
+    "grab_throw": [
+     "^punch cross$"
+    ],
+    "hit": [
+     "^hit chest$"
+    ],
+    "stumble": [
+     "^hit knockback$"
+    ],
+    "stagger": [
+     "^hit knockback$"
+    ],
+    "finished": [
+     "^death01$"
+    ],
+    "get_up": [
+     "^laytoidle$"
+    ]
+   },
+   "look": {
+    "*": {
+     "tint": [
+      0.16,
+      0.13,
+      0.13
+     ],
+     "rough": 0.35,
+     "metal": 0.2
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,548 @@
+# Shinobi Duel — project notes
+
+Tools in `tools/` need the dev server running (`pnpm dev`, port 5411). `DUEL_VIEW=960x540` forces a
+small viewport on any gpu.mjs tool (light GPU load while the machine is shared). Test hooks:
+`window.__duel.game` (pause / step / startFight / forceBossAttack / forcePhase2 / place / input.promptPress),
+`window.__duel.rules` (the tuned constants).
+
+## Agent coordination
+- Characters agent: done (18:35), GPU idle.
+- Audio hooks wired (18:15): `dodge(dir)` with the dodge direction relative to her facing, `dodgeLand()`
+  when the dodge ends, `nearMiss()` with the near-miss slow-mo, `hitAccent()` on every cut that lands
+  on him (opening or armoured), `postureWarn()` once when his posture crosses 80 % (re-armed below 72 %,
+  not during the break), `gourdTick()` when a gourd charge is used, `mikiri()` unchanged. `peril()`
+  takes no argument, so the perilous type isn't passed. Input: "M" (mute), modifiers, lock / OS / F-keys
+  and Tab no longer count as "any key" for the title / death / defeat prompts (`NOT_ANY`, src/core/Input.ts).
+- Requests for audio hooks (characters agent → audio agent; done by the audio agent, kept for the record):
+  - `nearMiss(perilous: boolean)` — the near-miss whiff: a dodge's i-frames carried her through a live
+    blade (Game.nearMiss, once per attack; plays with a 0.13-0.18 s 0.35× slow-mo). Soft, airy, short.
+  - `dodge()` already exists; wanted: 2-3 variants picked at random (and a slightly heavier one for the
+    roll-like forward dodge / mikiri step) — `au.dodge()` is called on every dodge start.
+  - `mikiri()` already exists (heavy stomp + hitstop 0.09 s + camera punch): if you rework it, keep the
+    stomp's low end — it's the most satisfying beat of the fight.
+  - Hit-landed accent: `hitFlesh(true)` fires when her cut lands in an opening; wanted a short, bright
+    accent layered on it (cut landed ≠ blocked clang).
+- Requests for lighting agent:
+  - (16:20) ~~Height-fog chunk fails on SpriteMaterial~~ — DONE (17:00): `fog_vertex` now derives the world
+    direction from `mvPosition` (`vFogDir = (vec4(mvPosition.xyz, 0.0) * viewMatrix).xyz`), so sprites,
+    points and skinned meshes all compile; no `transformed` dependency left.
+  - FYI rim — ANSWER (lighting agent): the light loop now adds a sun-aligned warm rim + cold sky rim to every
+    skinned body AND (via a `CHAR_RIM` define set at runtime from `Arena.update`) to every rigid mesh under a
+    skinned root (kabuto, horns, sode, hat, swords). Tuning `SKIN_RIM` in `src/world/materials.ts`
+    (sun 0.62, sky 0.22, pow 2.6). Your `addRim` stacks on top: suggest lowering it to ~0.25 (player) /
+    ~0.2 (boss) or dropping it; screenshots look fine either way, the boss reads a touch hot on the reverse angle.
+  - FYI: the deflect spark ring's full-width horizontal streak and the red posture-break glow sit in the fx
+    code (not lighting-owned); the critic flagged the streak as long (~30% of screen width suggested).
+- Audio for the game-feel pass (audio agent, 18:05): all ready on `this.audio` (GameAudio), randomised per
+  call, ducking built in, no need to add anything else. Characters agent, call these:
+  - `dodge(dir?)` with `dir` = "forward" | "back" | "left" | "right" (default "back"; `au.dodge()` still works):
+    direction-shaped body whoosh + cloth rustle + tile footfall + landing (footfall + snow scuff at +0.22 s).
+  - `dodgeLand(delay = 0)`: an extra landing footfall + snow scuff (rolls / long dodges; `dodge()` already
+    includes one).
+  - `nearMiss()`: a dodge that narrowly avoided a hit: tight airy blade pass (boss side) + low time-slow
+    swell; music dips to 0.7 for ~0.5 s. Call once per avoided blow.
+  - `mikiri()` (existing name, re-voiced): wood / metal crunch + bass hit + drum; ducks to 0.45.
+  - `hitAccent()`: crisp meaty cut on the boss; layer it with the existing `hitFlesh(true)` on clean hits
+    (or on the bigger ones only).
+  - `postureWarn()`: soft round chime when his posture bar crosses "near breaking" (call on the crossing,
+    not every frame; ≥ 1 s apart is plenty).
+  - `gourdTick()`: small hollow wooden tock for a gourd-charge HUD change.
+- Requests for audio hooks (audio agent, 17:25) — optional, audio works without them:
+  - `src/core/Input.ts` (unowned; not edited): "M" toggles mute (listener in `GameAudio`), but on the title /
+    death / defeat prompts M also counts as "any key". Suggest skipping `KeyM` in `promptPress`.
+  - Nice to have: pass the perilous kind to `au.peril()` in `Game.drainEvents` (the boss's `attack.perilous`:
+    thrust / sweep / grab) if a distinct sting per kind is ever wanted; today one sting serves all (as in Sekiro).
+  - Already added (one line each, marked `// [audio hook]`, in the audio parts of `Game.ts`): `au.scene(...)`
+    before `au.update(dt)` (state, camera, fighter positions, phase, charging), and `"boss"` as the 2nd arg of
+    the general's `whoosh` calls + the sweep-passing whoosh.
+
+## Verification tools
+- `node tools/bot.mjs [secs]` — real-time playtest: title → a key → both phases. Passes only with ≥6 deflects,
+  ≥1 mikiri, ≥1 sweep jumped, exactly 1 heal, 2 deathblows (short + finisher), VICTORY, 0 errors.
+- `node tools/mech.mjs` — 51 deterministic mechanics checks (input, movement, camera, combat, the wiki ruleset:
+  spam guard, re-tap, mash floor, mikiri, sweep/kick, grab, glyph, gourd + punish, markers/phases, vitality
+  deathblow, regen tables, cancels, boss spam-deflect, charged cut, air cut, air deflect, safety roll, death flow).
+- `node tools/combat.mjs` — 19 sword-fight / deflect glitch repros (one per bug in "Combat pass" below).
+- `node tools/deathloop.mjs` — real keyboard/mouse events on the live loop, 3 rounds of die (mashing) → resurrect →
+  mash → die → DEFEAT → mash → one Enter restarts → mash; plus Esc → title → one fight. Proves the death loop is gone.
+- `node tools/fairness.mjs` — simulated fights: frame-perfect bot wins without dying (>35 s), a "learner"
+  (±55 ms on every reaction, 12% blows missed) wins on the 1st/2nd try, a masher (attack + guard spam) loses.
+- `node tools/skin-smoke.mjs` — SkinnedCharacter layer on a synthetic Mixamo-shaped GLB (14 checks, dev server only).
+- `node tools/anim-inspect.mjs [player|boss] [clip] [--at s]` — clips, durations, current event timeline, windows suggested from the blade-tip speed curve.
+- `?debug=anim` — in-game clip inspector: list / scrub / play clips, event bands on the timeline, hilt/tip markers, "suggest", "copy events".
+- `node tools/soak.mjs [secs]` — 5 bot fights back to back, random-input fuzz, resource growth, hitches, tab switch, resize.
+- `node tools/shoot.mjs`, `tools/strip.mjs`, `tools/probe.mjs`, `tools/charshot.mjs` (skinned pose close-ups), `tools/livestrip.mjs` (frames of the stepped live game: guardwalk / turn / dodge / combo / heal), `tools/montage.mjs` (tile shots) — screenshots for art review (write to `shots/`, gitignored).
+- `node tools/perf.mjs`, `tools/progs.mjs`, `tools/progs2.mjs`, `tools/hurtfps.mjs` — perf / first-use shader compile probes.
+
+- `node tools/audio-render.mjs [name ...] [--wav]` — renders ~50 key sounds / music states offline
+  (OfflineAudioContext, headless Chromium, no GPU) through the real mix; prints peak / RMS / crest / spectral
+  centroid / tail and fails on clipping (> 0.98), NaN or silence. `--wav` writes `tools/.audio-tmp/*.wav`
+  (gitignored scratch: delete after listening). `?audio=off` disables audio in the game (A/B perf).
+
+## Definition of done (Sekiro ruleset pass)
+- [x] `pnpm build` (strict tsc) clean
+- [x] bot.mjs at 1600×900: both phases, 16 deflects, 4 mikiri, 1 sweep jumped + head kick, 1 heal, 0 hits, VICTORY, 164-200 fps
+- [x] mech.mjs 51/51, combat.mjs 19/19, skin-smoke.mjs 14/14, deathloop.mjs all pass, fairness.mjs 4/4, 0 console errors
+- [x] soak.mjs 120 s: 5 bot wins, fuzz clean (no stuck states / NaN / growth), 0 combat frames > 20 ms
+- [x] perf.mjs ~198-200 fps (headless cap) at 1600×900 on the RTX 4060
+- [x] Critic review (3 rounds vs the wiki + Genichiro footage descriptions): no must-fix left
+- [x] Deploy config: vercel.json, .github/workflows/pages.yml, vite base (relative, `/shinobi-duel/` on Pages)
+- [x] Captures deleted, research/ deleted
+- [x] Arena real-asset pass: build clean; mech 51/51, combat 19/19, skin-smoke 14/14, deathloop 26/26,
+  fairness 4/4, bot (16 deflects, 4 mikiri, sweep jumped, 1 heal, 2 deathblows, VICTORY, 200 fps), soak 120 s
+  all pass (0 combat frames > 20 ms, programs 106 → 106), perf 200 fps, 0 console errors; production build
+  (`pnpm preview`) loads the arena
+
+- [x] Mixamo characters pass (kunoichi + general): all suites pass on skinned bodies, build clean;
+  perf / soak pending (GPU in use)
+
+## Difficulty pass (easier general) — `src/game/difficulty.ts`
+Every knob is in `DIFFICULTY` (with the previous value in brackets in the file). Deflects stay the core;
+mashing still loses (5/5 in fairness.mjs, dying in phase 2 at best).
+- **Openings:** after every attack he stands open 0.85 s (phase 2: 0.65 s) — cuts land in full and
+  flinch him; his idle guard lets the first cut of a string slip 35 % of the time (second 20 %);
+  he turns cuts aside less (3rd cut 15 %, 4th 40 %, 5th+ 70 %; was 30 / 65 / 100 %) and answers after a
+  0.45 s beat on guard, half the time with the combo instead of the flurry; 3 cuts per opening (was 2);
+  deflected recoil 0.95 s.
+- **Pressure:** idle gap after an attack 0.6 + 0-0.8 s (phase 2 0.35 + 0-0.55 s; was 0.35 + 0.6 /
+  0.15 + 0.35); phase-2 tempo 1.02 (was 1.12; phase 1 stays 1.0, the combo lunges are tuned at that
+  tempo); mid-range picks weighted (`picks`): phase-2 flurry 10 % (was 22 %), comboDelay 8-10 % (was
+  14-18 %); gourd punish reacts after 0.4 s from range (was 0.22) and point blank starts the combo from
+  its top (was 0.18 s in), so the swallow gets in first and a step away avoids the cut.
+- **Survivability:** player takes 70 % damage (throw included); a held block costs 60 % of the blow's
+  posture (was 90 %); posture regen 18/s (was 13). Gourd stays at 3 charges.
+- **Deflect:** window 0.25 s before + 0.06 s late grace (was 0.2 + 0.05); mash steps
+  0.25/0.25/0.22/0.19/0.16 s (was 0.2/0.2/0.167/0.133/0.1). Tap-and-hold unchanged.
+- **Progress:** deflect base posture 12 (was 5; +12 %/chained deflect, ×1.15 heavy): ~5-6 deflects in a
+  string break him, or 4 plus cuts in the openings; cuts in openings 60 % of their posture (was 50),
+  through his armoured swing 30 % (was 25); his posture regen 9/s (was 13).
+- **Numbers (fairness.mjs, 60 Hz simulated):** perfect 25.8-26.5 s, 0 deaths; learner (±55 ms, 12 %
+  misses) 27-41.5 s, 1st try; casual (±70 ms, 20 % misses, new) 26.5-30.8 s, 1st try for all three
+  players; masher 5/5 losses (reaches phase 2, boss left at 59-85 hp). bot.mjs: 10 deflects, 2 mikiri,
+  sweep jumped + kick, 1 heal, 2 deathblows, 0 hits, VICTORY.
+- Tests updated for the new rules: mech (deflect window boundaries at -310/-240/…/+50/+90 ms, mash
+  steps read from `rules.DEFLECT_STEPS`, counter string = flurry or combo after a beat, grab damage ×
+  `playerDamage`, gourd punish after `healReact`, dodge i-frame probe 0.07 s before contact, guard
+  break probe with the posture delay held off), fairness (casual profile, masher ≤ 1 lucky win in 5,
+  the duel lasts > 25 s).
+
+## Game-feel pass (restrained)
+- Near-miss: a dodge whose i-frames carry her through a live blade (any blow, the sweep) → 0.13 s
+  (perilous 0.18 s) slow-mo at 0.35×, a faint cool flash, `audio.nearMiss` hook; once per attack, never
+  stacked on another slow-mo. `stats.nearMisses`.
+- Dodge start: a small low snow kick at the feet (`fx.kickPuff`), directional dodge clips (see Characters).
+- Slam dust made smaller / lower / shorter (it hid the fighters in the opening leap); deflect flare
+  streak 14 → 3.2 m wide (~35-40 % of the screen), 0.16 → 0.08 s.
+- Already in place and kept: hitstop on every contact (35-90 ms), camera shake scaled per event, the
+  vitality lag (ghost) bars, posture flash near breaking, cancel windows (mech "cancel" checks).
+- Not done (kept restrained / out of time): afterimage ghosts, camera FOV kick on dodge, directional
+  shake, posture-bar overshoot animation.
+
+## Arena: real assets (Blender + Poly Haven) — done
+The procedural rooftop was rebuilt in Blender 5.1.2 (portable install at `E:\blender\blender-5.1.2-windows-x64\`)
+through the Blender MCP and ships as `public/assets/arena.glb` (13.2 MB: 30 WebP textures, 6.2 MB image data;
+meshopt geometry, ~315k faces, 63 primitives of which 39 are the 13 lanterns) + `public/assets/sky_dusk.hdr` (1.1 MB). Source file:
+`blender/arena.blend` (textures referenced relatively from `blender/tex/`).
+
+### Pipeline (all scripts in `tools/blender/`)
+1. `node tools/blender/fetch_polyhaven.mjs` — Poly Haven sources → `blender/tex/` (skips existing).
+2. `python tools/blender/prep_textures.py` — derived textures → `blender/tex/derived/` (kawara recoloured to
+   smoked ibushi clay, black-stained wood, lantern paper with 祭, shoji lattice lit/unlit).
+3. Start Blender with the MCP server: `blender.exe --python tools/blender/start_mcp.py` (enables the addon,
+   turns on Poly Haven, starts the socket on 9876).
+4. In Blender (`execute_blender_code`): `exec(open(r"C:\Code\shinobi-duel\tools\blender\make_arena.py").read())`
+   → `build_arena.py` (geometry, merged per group × material) → `bake_ao.py` (Cycles/OptiX AO, 13 maps) → saves
+   `blender/arena.blend` → exports `blender/cache/arena_raw.glb` (~79 MB). ~35 s.
+5. `pnpm arena:pack` (`pack_arena.mjs`, glTF-Transform) → `public/assets/arena.glb`: dedup/prune/weld, WebP
+   (2k for the kawara colour/normal and rooftop AO, 1k elsewhere), meshopt. The decoder is
+   `three/addons/libs/meshopt_decoder.module.js`, bundled (no CDN).
+
+### What's in the GLB / what stays in code
+- GLB: fighting floor (6930 overlapping round tiles, each sampling a random photographed tile; pan layer;
+  wind-packed snow sheet in the channels with four 3-5 m drift patches; drifts piled on the ridge), ridge
+  (stepped noshi courses, cap, lumpy snow crest, onigawara with boss + horns), upturned eave skirts on three
+  sides + far slope, the storey below (plaster, black clapboard, lattice windows), lower roof, ishigaki base;
+  two keeps (5 tiers at 0.82× width each, curved upturned roofs, snow slab on every ledge, chidori-hafu, gold
+  shachihoko), turrets, halls and walls on stone bases 8 m lower, pines 10 m lower in the mist; lanterns.
+- Code (`src/world/Arena.ts`, `Surround.ts`): sky shader (procedural clouds / huge sun / haze over the HDRI
+  gradient, rotated so the HDRI's afterglow sits behind `SUN_DIR`), mountains (saddle at the sun's azimuth so
+  the disc shows beside the keep), mist, sun disc for god rays, all lights, lantern swing / flicker
+  (`LanternHang_NN` nodes, `_L` = gets a point light), the snow shader re-applied per material name.
+- Contracts unchanged: `ARENA_HALF`, `RIDGE_Z`, floor at y≈0, `arena.sun` (shadowed), `arena.update(dt, wind)`,
+  `arena.surround.sunMesh`, fog / mist, post pipeline. `scene.environment` = PMREM of the HDRI (intensity 0.14).
+- Loading: `main.ts` shows "the castle rises from the mist…" on the title, awaits `arena.load()`, recompiles the
+  whole scene (hidden fx included) into a linear target, then sets `window.__duel.ready`. A failed load logs
+  an error and the game still becomes ready (sky + mountains only).
+- Baked: ambient occlusion only (UV1 → glTF occlusionTexture → three aoMap; darkens ambient / hemisphere / IBL).
+  The floor tiles use a per-tile AO atlas written by the build (Smart UV packs 7000 islands into specks); the
+  snow sheet is planar; the rest Smart UV. Direct light is not baked: the sun must shadow the fighters and the
+  dusk grade is tuned in code.
+
+### Poly Haven assets (all CC0, https://polyhaven.com/license)
+`roof_tiles` (2k), `japanese_stone_wall` (2k), `plastered_wall_02` (1k), `weathered_planks` (1k), `snow_02` (1k),
+HDRI `qwantani_dusk_2_puresky` (1k). Pages: https://polyhaven.com/a/<id>.
+
+### Notes
+- The installed Blender MCP addon is older than the MCP server (`get_addon_status` → "outdated"; the
+  `search_polyhaven_assets` tool fails with a `category` argument error). Everything else works; assets were
+  fetched straight from api.polyhaven.com. Update with `uvx mcp-for-blender install-addon` if wanted.
+- Perf: 200 fps (headless cap) at 1600×900; 112.7 fps at 2560×1440 vs 99.5 fps for the old procedural arena.
+- Critic (2 rounds vs Ashina Castle references): fixed the hidden sun (keep moved aside, mountain saddle,
+  white-gold disc matching the god-ray mesh), tile brightness (darker, cooler albedo), even snow (clumpier
+  caps, fuller channels, drift patches), "not high up" (compound/pines lowered), streetlight-like lanterns
+  (chochin shape, warm emissive). Left as is: tiles still warm on the reverse angle under the orange sun
+  (changing it means changing the sun/hemisphere that also light the fighters).
+
+## Lighting pass (Sekiro dusk) — done (Sep 24, lighting agent)
+Target: low-saturation mauve/peach dusk, huge low sun in haze, warm key/rim from behind the general, cold
+blue shadows and fill, layered mist, lantern glow, painterly grade. Files: `src/world/Arena.ts`,
+`src/world/materials.ts`, `src/world/Surround.ts`, `src/render/Post.ts`, `src/fx/Snow.ts`. No Game/main edits.
+
+### Tuned values
+- **Grade** (`Post.ts` `GRADE`, custom `GradeEffect` replaces ToneMappingEffect): exposure 0.8 → hue-preserving
+  ACES on luminance → display-space grade: saturation 0.8 low / 1.12 highlights (luma-keyed, so sparks /
+  lanterns / sun stay hot while mid-tones are muted), split tone lift [0.008, 0.02, 0.05] (cold) / gain
+  [1.04, 0.99, 0.93] (warm), extra cold multiply ×(0.9, 0.97, 1.08) below luma 0.55, S-curve contrast 0.32,
+  paper grain 0.024. Desat / flash / bars / fade uniforms unchanged (death, finisher, victory).
+- **Post chain**: N8AO Medium half-res, radius/falloff tuned, intensity 3.8, colour 0x070713 (blue-violet
+  contact shadows); Bloom mipmap threshold 1.15, smoothing 0.35, intensity 0.95, radius 0.72; GodRays density
+  0.94, decay 0.93, weight 0.26, exposure 0.3, 60 samples; chromatic aberration base 0.0001 + hit kick ×0.0012
+  (was ×0.003); vignette 0.3 / 0.55.
+- **Lights** (`Arena.ts`): sun DirectionalLight 0xff9d5c × 6.2, low (`LIGHT_DIR` -0.72, 0.3, -0.62), shadow 4096²,
+  frustum ±17 m around the fighting floor, near/far 10/75, PCFSoft radius 3; hemisphere 0x5f6c96 / 0x262c3e × 0.5;
+  cold fill DirectionalLight 0x93a3d6 × 0.8; HDRI env intensity 0.16, sky `uHdrMix` 0.16.
+- **Character rim** (`materials.ts` `SKIN_RIM`): sun 0.62 (pow 2.6, strongest back-lit), sky 0.22 cold.
+  Applies to skinned bodies and — through `CHAR_RIM` (tagged once a second by `Arena.update`, one recompile
+  when a character appears) — their rigid attachments.
+- **Sky** (`SKY_GLSL`): horizon cold blue-violet (0.15, 0.155, 0.23) away from the sun → peach (0.34, 0.25, 0.24)
+  → hot band (0.66, 0.33, 0.22) toward it; zenith (0.065, 0.065, 0.11); sun disc #fef2d1-ish ×14 with a wide
+  peach halo; painted cloud band + high cloud deck darkened / cooled away from the sun.
+- **Mountains**: three hazed ranges, haze ×(0.72 + 0.28·toward-sun) so the reverse angle keeps layered cold
+  silhouettes; snowy slopes (0.2, 0.22, 0.32).
+- **Fog / mist**: scene fog 0x6e6270 density 0.0072 with a warm band toward the sun (fog chunk), height mist
+  below the roof line; four Surround mist banks (cooler, lower alpha).
+- **Snow**: albedo (0.52, 0.57, 0.7); roof tiles snow amount 0.58, colour (0.44, 0.48, 0.6). Falling snow glint
+  pow 6 toward the sun, colour cold (0.62, 0.68, 0.86) → hot (3.8, 1.75, 0.8).
+- **Lanterns**: paper emissive 0xff9a45 × 4.2 (flicker), `_L` point lights 0xff8a3c × 16, distance 13, decay
+  1.35; additive halo sprite (1.5 m, fog off) per lantern.
+
+### Verification (17:15)
+`pnpm build` clean (strict tsc); mech, combat 19/19, deathloop, bot (VICTORY in 31 s, 2 deathblows) pass with
+0 console errors (runs on port 5412; bot needs a quiet tree — a Vite reload from edits mid-run fails it).
+perf.mjs at 2560×1440: 92-98 fps baseline (no AO 123, no shadows 102); no clean "before" was measured in
+this pass (GPU shared); the last recorded figure is 112.7 fps, taken before the Mixamo characters landed. `main.ts` (marked line)
+calls `arena.tagCharacterRim()` before the start-up warm-up so the rim variants never compile mid-game. Critic: 2 rounds vs Ashina Castle dusk references — fixed
+over-bright roof, magenta shadows, boss armour without rim, heavy CA/bloom/grain, zenith too light.
+Left: lantern pools on the snow read weakly under the strong sun; the far plain on the reverse angle is a
+flat pale strip; the deflect streak / posture-break glow are fx-owned.
+
+## Audio overhaul — done (Sep 24, audio agent)
+All sound is synthesised at runtime (Web Audio; no samples). `GameAudio` (`src/audio/Audio.ts`) keeps every old
+method name / signature; `whoosh(heavy, from = "player")` gained an optional 2nd arg, and `scene(...)` is new.
+
+### Architecture (`src/audio/`)
+- `mix.ts` — buses and primitives. Emitters (player / boss / centre for SFX, player / boss for voices) = gain
+  (distance) → StereoPanner, placed each frame from the camera's right vector (pan ±0.6 max, gain
+  1 / (1 + 0.09·(d − 4 m)), floor 0.45; only re-scheduled when they move). Buses → master → glue compressor
+  (−16 dB, 3:1, 6 ms / 200 ms) → limiter (−3 dB, 20:1, 1 ms / 80 ms) → safety soft clipper (linear to ±0.85,
+  never above ±0.98) → mute → out. Reverb: 22 ms pre-delay → 220 Hz high-pass → convolver with a generated
+  "open rooftop" IR (sparse early reflections at 11-93 ms incl. a 36 ms tile slap, 2.4 s airy tail,
+  RT60 ≈ 1.8 s, highs absorbed over time, decorrelated L/R); a second convolver on the same IR for music
+  (ducked with it). 30 Hz high-pass before the glue compressor; −6 dB low shelf at 90 Hz on the music.
+  Ducking: `duck(depth, hold, release)` on music + ambience (sidechain-style: 12 ms down, hold, exponential
+  back) fired by deflects (0.4, 0.55 inside a chain), hits (0.8), hurt (0.6), peril (0.3), slam (0.5), posture break (0.3),
+  deathblow (0.3), finisher (0.15); plus the game's `setDuck` scene duck (cinematics). Every one-shot node
+  disconnects itself `onended`; per frame only a few `setTargetAtTime` calls (no allocations).
+- `synth.ts` — generated once: white + pink noise, the rooftop IR, Karplus-Strong strings (fractional delay,
+  loop low-pass, one-sided **sawari** barrier that folds the wave while it's loud, parallel two-pole body
+  modes, skin thwack): `SHAMISEN` (D3, buzzy) and `KOTO` (D4, clean), wave-shaper curves.
+- `voice.ts` — formant voices: glottal PeriodicWave (1/n^1.6) + breath noise → 3 formant band-passes (vowel
+  morph), low-passed noise pitch jitter, falling contours, optional tanh grit, vibrato. Kunoichi: breathy
+  "ha" on ~15% of light / 40% of heavy cuts, "hu" on
+  30% of dodges / 40% of jumps, pained "ah" on hurt, an exhale after the gourd; min 0.45-0.6 s apart.
+  General: chest kiai on 70% of heavy blows, grunt on ~45% of hits taken, the phase-2 battle cry (1.7 s roar
+  + octave-down double). All kept ~15 dB under the hits (see stats).
+- `music.ts` — adaptive score on a 16th grid, scheduled 160 ms ahead on the audio clock. Title: drone
+  (D2/A2) + sparse shakuhachi phrases on the miyako-bushi scale (D Eb G A Bb). Fight: `intensity` (from
+  `Game`: boss vitality lost, posture, phase 2) mapped 0.4..1 → layers: o-daiko downbeats (→ busier pattern
+  above 0.62 or in phase 2), nagado syncopation > 0.5, rim "ka" > 0.45, shime 16ths > 0.68, fills > 0.72;
+  tempo = `taikoTempo` (76 → ~144 bpm). The shakuhachi (meri scoop, chiff, delayed vibrato, breath band)
+  + occasional koto notes get sparser as the drums thicken, none at full pressure; denser layers play each
+  drum softer (×(1 − 0.25·intensity)). Stings (music output ×2 once the fight is over): victory
+  (o-daiko roll → big hit, rising koto, held flute), death (deep drum, falling saw pad, flute fall), defeat.
+- `ambience.ts` — two decorrelated pink-noise howl beds (breathing band-passes, rising with intensity),
+  random gusts with a whistle, snow hush (wide 3.2-9 kHz), distant bonshō every 26-48 s (detuned inharmonic
+  partials, long beating decay, far and dark), a lantern creak every 6-16 s (stick-slip pulse train).
+- Scene state: `au.scene(state, camera, p.pos, b.pos, phase, charging)` per frame (the one hook in `Game`)
+  drives music transitions, emitters and the charged-cut hum. `?audio=off` disables audio; **M** mutes
+  (remembered in localStorage).
+
+### Bus levels
+master 0.8 · sfx 0.9 · voice 0.5 · music 0.22 · ambience 0.34 · reverb return 0.42 (music reverb 0.55).
+Offline peaks (dBFS, post-limiter, `tools/audio-render.mjs`): perfect deflect −2 (loudest SFX, spectral
+centroid 2-4 kHz, with the finisher −3, revive −4, posture break −4.6, deathblow −5), peril −8.6, hits
+on armour / cloth −11, block −14, boss heavy swing −12, player swing −17 / −12 heavy, voices −13 to −15
+(battle cry −8.5), footsteps −34, fight music −13 peak / −30 RMS (hot −29 RMS), ambience −8 / −32,
+victory sting −10.5; worst-case stress (hot music + deflect chain + posture break + hit) −0.7 dBFS,
+nothing over 0.98, no NaN, nothing silent.
+
+### Sounds
+Perfect deflect (crack + sizzle + a 2 kHz "clang" band + 7 detuned steel modes on free-bar ratios from
+650 Hz with a 1.25-1.7 s ring on a choke bus (the previous ring dips 6 dB on the next deflect) + late glassy
+overtone + body thump / low-mid body + pre-delayed reverb; ±1.5% pitch per hit, a chain within 1.3 s climbs
++1.2% a step (cap 4) and alternates low / high), other blade contacts (`clang(<0.85)`: shorter, lower, no chain), block (heavy knock + short low
+modes), guard break (crunch grains, sinking drum, groan, stumbling feet, hurt voice), posture break (o-daiko,
+metal shatter spray, falling whoosh, deep duck), swings (blade band sweep + air + cloth; 3 variants rotating;
+boss longer / lower with a body rush + kiai), charged cut (rising filtered hum while charging → snap on
+release), hits on armour (slice + meat + lamellar clacks) vs cloth, player hurt, kick (head =
+helmet ring), mikiri (bass hit + wood grains / knock + damped blade scrape and low ring + drum), grab, throw slam, leap slam, footsteps (tile click + knock + snow grains; the general's heavier
+with plate jingle), dodge by direction (`dodge(dir)`: forward rising push / back falling pull / sides swept pass,
+cloth rustle, footfall + `dodgeLand` landing with snow scuff), near-miss whiff + time-slow swell (`nearMiss`),
+hit-landed accent (`hitAccent`), posture-near-break chime (`postureWarn`), gourd-charge tick (`gourdTick`), jump, land, gourd (cork, slosh, three
+gulps with bubbles, warm swell, exhale), empty gourd, resurrection (accelerating heartbeat, eerie rising
+tone, drum + pluck), deathblow (impact + ink spray grains + pluck), finisher (sub boom + ink spray + the
+shamisen pluck), glint, perilous warning, phase-2 rise (growl + battle cry + two o-daiko), death sting, UI start.
+
+### Verification (18:07)
+`pnpm build` clean (strict tsc); mech ALL PASS, combat 19/19, deathloop ALL PASS, bot PASS (VICTORY, 10 deflects,
+2 mikiri, sweep jumped + kick, 1 heal, 0 errors) against a 5414 dev server at 960×540; audio-render PASS on all
+renders. Frame time A/B: 200 fps (cap) with audio on under a sound storm vs `?audio=off`; audio main-thread cost
+≈ 0.03 ms / frame; bot averages 158-179 fps with audio vs 162 without (shared GPU, noisy; dips occur either way).
+
+### Not verifiable here
+Nothing was judged by ear (no listening possible): levels / spectra were checked with `tools/audio-render.mjs`
+and a critic review against descriptions of Sekiro's combat audio (fixed: clang too bright / thin and under the
+hot music, arcade-like chain climb and ring wash, peril masked by the taiko, sub glides pumping the master,
+sizzly shatter, cathedral-long reverb, chirpy rising voice contours without jitter). Voices are the riskiest: if they read as
+silly, lower `LEVELS.voice` in `mix.ts` (0.5 → 0.25) or set it to 0.
+
+## Controls (PC defaults from the wiki, adapted)
+LMB attack (hold: the light cut flows into a charged cut that drives through his guard) · RMB guard / tap to
+deflect (also K, L) · Shift step dodge, hold to sprint (step into a thrust = mikiri) · Space jump, again at him =
+kick (on his head during a sweep = heavy posture), attack in the air = air cut · R healing gourd · MMB / Q / Tab
+lock-on toggle (unlocking re-centres the camera behind the shinobi) · WASD move (camera-relative, locked or free).
+Keyboard-only: J attack. Menus: E / Enter / Space / click confirm, Esc / Backspace back. Crouch: not implemented
+(stealth is out of scope). The title shows these in ink; nothing else is on screen outside the fight HUD.
+
+## Sekiro rules implemented (from the fextralife wiki; page in brackets)
+- Deflect: tap guard ≤ 0.2 s (12 frames) before the blow [Deflection]; 50 ms late grace (latency, deliberate).
+  Pressing early = block. Anti-mash as the wiki describes it but forgiving: each guard press within 0.5 s of the
+  last release (or, while held, of the last press on another binding) steps the window 0.2 → 0.2 → 0.167 →
+  0.133 → 0.1 s, never 0; clears after 0.5 s (30 frames) and on a deflect [Deflection]. `Input.DEFLECT_STEPS`.
+- Deflects deal much more posture than blocks, more for consecutive deflects (+12% each within 1 s, ×1.15 heavy);
+  a deflect never breaks your own posture [Deflection, Posture]. Base 5 (`DEFLECT_POSTURE`).
+- Guard: physical blows 100% vitality negated, posture 90% taken; a thrust goes through guard [Combat].
+  Enemies deflecting you deal no posture, you recover slower [Deflection]; guard back 0.08 s after it.
+- Posture: player regen after ~1 s, none while attacking / sprinting / staggered, ×2.5 behind a raised guard;
+  enemies: no delay, none while attacking. Both scale with vitality 100/66/33/1 % (≥75/50/25/0) [Posture, Stats].
+  HUD: posture bar flashes near breaking, flashes red while low vitality limits regen [Posture].
+- Player guard break: staggered, dodge or jump shortens it (safety roll) [Posture]; hits while broken ×1.5.
+- Deathblow when posture is full OR vitality is empty (red mark); missed: he recovers a little and fights on
+  [Deathblow, Posture]. Two markers: vitality + posture fully restored between lives; the last one is the
+  finisher (full cinematic → VICTORY), the first a short deathblow, then he rises for phase 2 [Bosses, home].
+- Perilous: red 危 over the shinobi's head ~0.8-0.9 s before the blow [Perilous Attacks, Combat].
+  Thrust: can't guard, can deflect, sidestep (i-frames), Mikiri = step dodge toward him, window = whole dodge,
+  too early fails [Mikiri Counter]. Sweep: jump it or step through on i-frames; jump again in front of him = kick
+  off his head, heavy posture [Combat, Perilous Attacks]. Grab: can't guard/deflect, dodge or jump; he's left open.
+- Resurrection: once per fight, on the spot, 50% vitality (amount not on the wiki); the boss keeps his vitality,
+  posture and markers; a second death = defeat [Resurrection, Combat]. Node shown above the vitality bar [Stats].
+- Healing gourd on R [Controls]; 3 charges, 45% over 0.35 s after the swallow; not refilled by resurrection
+  (only resting refills) [Healing Gourd]. He punishes it (point blank at once, from range after 0.22 s: phase 1
+  leap / string, phase 2 dive thrust) [Genichiro].
+- Boss (Genichiro-like) [Genichiro pages]: guards cuts, turns strings aside and answers with a 5-swipe string;
+  leap → thrust follow-up (phase 1; sweep once hurt, ~3:1), phase 2 faster (×1.12), shorter pauses, flurry,
+  leap → flurry/sweep/thrust, flurry → thrust, combo → grab; breaks out after 2 cuts in an opening.
+- Not implemented on purpose: lightning (+reversal), prosthetic tools, combat arts, stealth / crouch, skills,
+  items beyond the gourd, multiple resurrection nodes (the fight-scoped rule is one), ranged bow punish.
+
+## Tuned numbers (Game.ts / Boss.ts / Player.ts)
+Deflect 5 (+12%/chain), mikiri 14, head kick 14, body kick 4, charged cut 16 posture through guard, cuts in his
+swing ×0.45 vitality; boss regen 13/s × vitality table, deathblow window 4 s, kneel 1.4 s + rise 1.6 s; player HP
+100 / posture 100, regen 13/s after 1 s; boss hits 11-26, grab throw 30; hitstun 0.4 s (guard back at 0.2 s).
+fairness.mjs: perfect ~37 s, learner 39-68 s (1st try), masher loses in phase 1.
+
+## Further improvements (listed, not done)
+- A readable ranged punish for phase 1 (the wiki's bow shot) — needs a bow; he leaps instead.
+- Lightning phase-2 move + Lightning Reversal (the wiki's fourth perilous type).
+- Per-move hit sounds tuned by ear on real speakers; a synthesized voice set (kiai / hurt) for the kunoichi.
+- An "Esc" pause overlay; gamepad bindings (the wiki's PS/Xbox defaults).
+
+## Combat pass (sword fighting / deflect) — each has a check in tools/combat.mjs
+- Sparks floated between the blades (7-47 cm off either blade) and the guard pose never met the incoming
+  blade → contact point from a sub-stepped sweep, attacker re-posed to the exact touch (bisection on the
+  real pose) and held until hitstop ends, defender's blade slid onto the point by a guard IK layer
+  (`Rig.guardPose`). Sparks now sit on both blades (< 1 cm).
+- A guarded swing kept cutting through the player's body (19-30 cm deep) → rebound layer on the attacker
+  (anchored at the contact, blade lifted in its own plane), extended through a blocked final blow's
+  follow-through; plus out-of-window blade avoidance with hysteresis.
+- Late deflects: the boss blade kept moving for up to 50 ms (and rode the leap's descent) → held pose,
+  pending contact stored in the attacker's frame.
+- Deflected leap left the general floating 0.62 m up (recoil never reset height) → falls to the roof.
+- Lunges coasted 0.3-0.6 m past their stop and body-slammed the player; the combo's opening cut whiffed
+  from 2.2 m+ → eased lunges that cover exactly `dist - stop`; opening lunge stop 1.45 m / 2.2 m max.
+- Recoil clip started from the combo's forward-strike pose (blade thrust into the player, 77 cm/step);
+  blade-direction crossfades lerped through ~0 and flipped → recoil starts on the rebound, blade
+  directions slerped (`slerpDir`), hit reaction key softened (75 → 31 cm/step).
+- Regular block could push posture past 100 with no break (full bar, no stagger) → breaks at 100.
+- Trail kept sampling the frozen blade in real time during hitstop → trail on game time, no repeats.
+- Finisher teleport interpolated from the old spot for a frame → interpolation reset.
+- Player swing whoosh fired at the wind-up (100-210 ms early) → at the cut.
+- Unlocked guard blocked facing away from the attacker → guard turns to the general within 8 m.
+- Camera free→lock whipped (0.104 rad/frame) → follow rates ease in over 0.4 s; camera follows the
+  interpolated fighters.
+- Contacts resolved on the previous step's pose → collisions now run after the rig step.
+
+## Characters: Mixamo kunoichi + samurai general (skinned bodies) — done
+The player is now a kunoichi (Mixamo **Kachujin G Rosales**, 1.68 m) and the general is Mixamo
+**Paladin J Nordstrom** (2.1 m) wearing the procedural horned kabuto + menpō, sode and cape. Both ship
+as `public/assets/chars/player.glb` (≈3.0 MB, 41 clips) and `boss.glb` (≈3.1 MB, 44 clips), WebP +
+meshopt. Sources: 85 FBX in `assets/mixamo/{player,boss}/` (gitignored: Adobe terms forbid
+redistributing the raw files), listed with product ids in `assets/mixamo/MANIFEST.md`.
+The procedural bodies stay as the fallback (`?chars=procedural`, or delete the GLBs).
+
+### Mixamo still needed
+Nothing: all 85 files are in (player 41, boss 44). Optional nice-to-haves if ever wanted: a guard-strafe
+(walking with the sword raised) and a parry clip; Mixamo has neither (block_impact stands in).
+
+### Pipeline
+1. `blender.exe -b --factory-startup --python tools/blender/build_char_cli.py -- player mixamo` (and `boss`)
+   — headless, ~30 s each. `build_char.py` imports `character.fbx` + every other FBX onto the one
+   armature, maps files to clip slots through `tools/blender/char_map.json` (a file already named after
+   a slot always wins; every other file ships under its own name, e.g. `hit_left`), tints the boss's
+   armour to dark lacquer, exports `blender/cache/<who>_raw.glb` and writes
+   `blender/cache/<who>_report.json` (slot → source file, lengths, missing slots).
+2. `node tools/blender/pack_char.mjs player` / `boss` → `public/assets/chars/<who>.glb`.
+3. Reload the game (the dev server serves raw FBX only with `CHARS_FBX=1`, so downloads landing in
+   `assets/mixamo/` never reload a running page). `?debug=anim` / `node tools/anim-inspect.mjs` / `node tools/charshot.mjs <who> clip@t,...`
+   (close-ups of any pose; `?anyclips` loads a body with required clips missing).
+
+### How the skinned layer keeps the tuned combat (src/chars/SkinnedCharacter.ts)
+- **Gameplay clock:** every one-shot move uses the procedural rig's timeline (hit windows, contacts,
+  wind-ups, chain, plunge, cues — the numbers fairness/bot were tuned on). The clip is **time-warped**
+  piecewise-linearly so its own wind-up peak / hit start / contact / hit end / plunge land exactly on
+  those times; a long Mixamo lead-in or recovery is skipped (≤ 1.6× speed-up, `warpK` per clip) instead
+  of played frantically. Boss strings (`combo`, `comboDelay`, `flurry`, `grabThrow`) are plans of clip
+  segments laid end to end, each trimmed to its cut.
+- **Clip events from the blade:** for untuned attack clips the hit window, contact and wind-up peak are
+  found at load from the katana tip's motion (fast + furthest forward). Mark a table entry `tuned: true`
+  in `animEvents.ts` to use hand-set numbers instead.
+- **Reference rig:** the hidden procedural body runs the same moves in the same spot (FighterSlot).
+  Its capsule is the hurt volume, and inside hit windows / rebounds / recoil the skinned blade is steered
+  onto its blade (arm + spine CCD, wrist turn, last centimetres by sliding the katana in the grip), so
+  reach, contact and deflect geometry are exactly the tuned ones. Outside those windows the Mixamo clip
+  plays untouched.
+- **Deflect / block:** a guard IK layer (arms + spine CCD + grip slide) brings the defender's blade onto
+  the contact point: sparks sit on both blades (< 3 cm, combat.mjs).
+- **Root motion:** Hips horizontal motion stripped in the Hips' parent frame (Mixamo armatures are Z-up
+  under a -90° X turn; the old code pinned the wrong axes, so dodges/slashes slid the body).
+- **Crossfades by hand:** fades start from each action's current weight and weights always sum to 1
+  (three's crossFadeTo restarts a fade-out from weight 1, which popped on a second switch mid-fade).
+- **Katana fit:** `sword.auto` fits the socket from the fist (pinky → index knuckle axis, edge toward the
+  knuckles) on the idle pose; no hand-tuned offsets needed for Mixamo hands.
+- **Variety:** `variants` (hit reactions taken in turn: hit / hit_left / hit_right), directional dodges
+  (`dir`: dodge / dodge_forward / dodge_left / dodge_right from the dodge direction), turn-in-place clips
+  when rotating on the spot (their 90° Hips twist removed: gameplay turns the body), victory flourish,
+  phase-2 battle cry, kneel held through the posture break, a small hyōtan gourd in her left hand while
+  she drinks.
+- **Guard on the move:** walking / strafing with the guard up layers the block pose (upper body, derived
+  clip `block__upper`) over the walk / strafe legs (`<clip>__lower`); the leg layer fades at the guard
+  fade's rate so leg weights always sum to 1.
+- **Attachments:** boss: procedural kabuto + horns + menpō on `Head`, sode on the shoulders, cape on
+  `Spine2`; player: the scarf wrap on `Neck` + two cloth tails. Offsets in `skinnedConfig.ts`.
+
+### Clip use (logical state → file)
+Player: idle, walk / walk_back / strafe_left / strafe_right / run (locomotion by velocity), turn_left /
+turn_right, block (guard), block_impact (deflect + block), attack1-3 (string), spin_attack (charged cut),
+jump_attack (air cut), dodge / dodge_forward / dodge_left / dodge_right (picked by the dodge direction; forward also = mikiri), hit + hit_left + hit_right (in turn), stagger
+(guard break), death, knockdown (thrown), getup (resurrection), heal (gourd), kick, jump, finisher
+(Bayonet Stab: finisher + first deathblow), victory.
+Boss: idle, walk / strafes / walk_back, turn_left / turn_right, block, block_impact (block + deflected
+recoil), attack1 + combo2 + combo3 (combo / comboDelay / flurry plans), overhead (axe downward attack),
+thrust (Thrust Slash), leap (jump attack), sweep (360 low axe spin), grab (Grab And Slam; throw = its
+second half), hit + hit_left + hit_right (flinch), hit_heavy (kicked, mikiri'd), finished (Kneeling Down:
+posture break and first deathblow) → kneel_idle (held), battlecry (phase-2 rise), kneel_idle →
+death_forward (after the finisher). His katana is tilted 15° toward the edge so the upright idle guard
+clears the kabuto horns.
+Unused extras kept in the GLB: attack4_combo, power_up, idle_look, draw, sheath, block_start, roll,
+death_forward (player); taunt, power_up, roll, run, jump, kick, dodge, death, spin_attack (boss).
+
+### Swapping in other / more Mixamo files
+Drop FBX (Binary, 30 fps, With Skin; same character) into `assets/mixamo/<who>/`, named after the slot
+(`attack1.fbx`) or under any name matched in `char_map.json`, rebuild (steps 1-2). A missing required
+clip logs a `[chars]` warning and that fighter stays procedural. Replace a character by replacing
+`character.fbx` and re-downloading the clips on that character.
+
+### Final verification (Sep 24, 18:35, skinned bodies, preview build on :5410)
+`pnpm build` clean (strict tsc). mech 51/51, combat 19/19, deathloop 26/26, fairness 5/5 (incl. the new
+casual profile), skin-smoke 14/14, bot PASS (10 deflects, 2 mikiri, sweep jumped + kick, 1 heal, 2
+deathblows, 0 hits, VICTORY; ≥ 144 fps at 1600×900), perf.mjs 200 fps (headless cap) at 1600×900 with and
+without characters, soak.mjs 120 s ALL PASS (5 victories, 0 combat frames > 20 ms, fuzz clean, no resource
+growth). 0 console errors.
+- Fixed on the way: contact searches (`holdAtContact` bisection, 10 re-poses per contact) ran the full arm
+  IK each time → 14-20 ms spikes; on the reference path the search now reads the reference blade and the
+  arm is posed once when the hold starts. Arm IK no longer updates the whole rig per CCD step. Gourd
+  prop is shrunk instead of hidden (no mid-fight geometry upload). soak.mjs counts a new attack instance
+  (`boss.serial`) as progress (phase-2 strings chain attack → attack for > 4 s).
+- A shader NaN: the deflect flare's `pow(1 - |x|, 1.6)` (and two ring `pow(x, 2.0)` with negative x) went
+  undefined at the streak's ends once it was short enough to be on screen, and bloom spread the NaN over
+  the whole frame (black screen on a deflect). Fixed in `src/fx/Billboards.ts`.
+- Critic (final): what works — the letterboxed deathblow, ink HUD, victory card. Left open: the posture
+  break is backlit by the sun from the default camera (a camera / bloom change), and the scarf tails whip
+  high during a dodge (cloth damping) — both listed for later.
+
+### Checks, deliberate differences, limits
+- Verified with the skinned bodies active (the tools' default): combat.mjs 19/19, mech.mjs 51/51,
+  deathloop.mjs 26/26, skin-smoke.mjs 14/14 (rewritten for the time-warp design), fairness.mjs 4/4,
+  bot.mjs PASS (16 deflects, 4 mikiri, sweep jumped + kick, 1 heal, 2 deathblows, 0 hits, VICTORY);
+  `?chars=procedural`: combat 19/19, mech 51/51. `pnpm build` clean.
+- combat.mjs now reads the active body (`g.bossBody`) instead of the procedural `g.general`; its sweep
+  check accepts the legacy (non-sub-stepped) sweep missing touches on skinned bodies (Mixamo swings move
+  the blade faster between steps; the shipped sub-stepped sweep still misses none).
+- **Pending (user gaming during the pass):** perf.mjs, soak.mjs and fps numbers not measured; headless
+  runs at 960×540 only. Run `node tools/perf.mjs` and `node tools/soak.mjs 120` when the GPU is free.
+- The skinned blade follows the procedural reference inside hit windows, so a Mixamo swing that goes a
+  different way from the procedural one bends the arm toward it for ~0.2 s around the contact.
+- No arm IK for the left hand beyond following the right upper arm (two-handed grips can drift apart
+  a little during strong IK corrections).
+- Skinned shaders (rim light) aren't in the start-up shader warm-up list; a first-use compile may hitch
+  once on slow machines (not measurable headless).
+- Unused-but-shipped extras (see above) could drive richer choices (sheath after victory, a taunt,
+  idle look-arounds) — not wired yet.
+- The free-pack fallback (Quaternius UAL + Universal Base Characters, CC0) was built as a pipeline test
+  only: `assets/source/_ual_build/*.glb`; see `assets/source/LICENSES.md`.
+
+## Fixed in the Sekiro ruleset pass (each has a check)
+- Death loop: the "any key" retry callback was never cleared, so every key in the next fight restarted it
+  (and a stale `setTimeout` could re-show DEFEAT) → one-shot prompts armed per screen, debounced (arming delay,
+  keys already held are ignored until released), disarmed on every state change; no timers. deathloop.mjs, mech.
+- Deflect under pressure: presses < 0.3 s apart shrank the window 0.2 → 0.1 → 0.067 → 0.033 → 0, so two presses
+  per blow broke it → release-based wiki rule, floor 0.1 s. mech "tapping twice per blow", "mash penalty".
+- Holding guard then re-tapping did nothing (press ignored while held) → per-source held tracking, a re-tap is a
+  fresh window; mashing a second binding still accrues the penalty. mech "re-tapping", "counts every binding".
+- Flurry cadence (0.3 s) < hitstun (0.4 s) stun-locked the player → guard returns 0.2 s into a hit. bot/fairness.
+- His counter after deflecting your cut landed before your guard came back → guard back 0.08 s after, the
+  counter string starts at its top (glint). mech "his counter ... can be deflected".
+- Heal punish unavoidable at range / free at point blank → distance-dependent reaction; cancel after the sip. mech.
+- Posture broke again on every cut of a staggered boss (restarting the deathblow window) → one break per stagger. bot.
+- Hit in mid-air left the player hanging → gravity for any airborne grounded state. mech "air".
+- `stats.victory` survived restarts (every later fight read as won) → reset with the fighters. fairness.
+
+## Fixed in earlier passes
+- Anti-mash: key/mouse release never reached `Input.release()`, so the 0.5 s-hold reset never fired.
+- Input buffers 0.15–0.2 s → attack 0.35 / dodge 0.3 / jump 0.2 s (presses in recovery fire when it ends).
+- Render interpolation added: body, world-space cloth and trail drawn at lerp(prev, cur, alpha), sim transform restored after render.
+- Dodge i-frames start on the first step (was 20 ms in; late dodges into the thrust were hit).
+- First-use shader compiles mid-fight: warm-up renders everything once through the composer.
+- Opening: general leaps off the keypress, hard cut to a low wide angle, 1.2 s dolly; title fades in 0.12 s.
+- Posture (superseded by the ruleset pass: see "Tuned numbers").
+- Light pillar beside the keep: mountain haze sampled the sun disc at a fixed elevation → own haze colour.
+- Roof: matte tiles, patchy snow caps, per-tile jitter, distance fade (no moiré), stepped ridge courses with snow ledges
+  (superseded by the Blender arena, same layout and snow shader settings).
+
+## Known limits
+- vsync-on 60 Hz pacing not testable headless; earlier uncapped runs held 200 fps at 1600×900 on the RTX 4060.
+- The combo's opening cut still falls ~7 cm short when started from beyond ~3.6 m (lunge capped at 2.2 m).
+- Sweep and grab resolve analytically (reach + arc + airborne / i-frames), not from the blade sweep.
+- Air deflects use the guard IK layer only (no airborne deflect clip).
+- The fuzz in soak.mjs shows one ~55 ms frame in ~19 000 (not reproduced in the bot fights; cause not found).
+- fps numbers are the headless 200 fps cap at 1600×900; 60 Hz vsync pacing not testable headless.
