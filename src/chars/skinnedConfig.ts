@@ -220,12 +220,14 @@ export const BOSS_SKIN: SkinnedConfig = {
     mikiried: { clip: "stumble", fit: 1.6, alt: ["hit_heavy", "hit"] },
     kicked: { clip: "hit_heavy", fit: 1.0, alt: ["hit"] },
     whiff: { clip: "idle", loop: true },
+    // A human general's step (Dodge Backward, time-fitted to the step).
+    evade: { clip: "dodge", fit: 0.55 },
     // First deathblow: down on one knee; the second life starts with a battle cry.
     rise: { clip: "battlecry", fit: 1.6, alt: ["power_up", "get_up", "idle"], warpK: 3 },
     deathblown: { clip: "finished", fit: 1.5, alt: ["stagger"] },
   },
   required: ["idle", "walk", "attack1", "combo2", "combo3", "overhead", "thrust", "leap", "block", "block_impact", "hit", "stagger", "finished"],
-  locomotion: { idle: "idle", walk: "walk", back: "walk_back", left: "strafe_left", right: "strafe_right", turnLeft: "turn_left", turnRight: "turn_right", walkSpeed: 1.7, runSpeed: 99 },
+  locomotion: { idle: "idle", walk: "walk", back: "walk_back", left: "strafe_left", right: "strafe_right", run: "run", turnLeft: "turn_left", turnRight: "turn_right", walkSpeed: 1.7, runSpeed: 5.0 },
   fades: {
     "*>block": 0.05,
     "*>recoil": 0.1,

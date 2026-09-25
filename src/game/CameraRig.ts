@@ -31,6 +31,9 @@ export class CameraRig {
   /** Lock-on toggled: follow rates ease in so the re-frame doesn't whip. */
   private swap = false;
   baseFov = 52;
+  /** Extra distance / height behind the followed fighter (the 2.1 m general needs more room). */
+  frameBack = 0;
+  frameUp = 0;
   /** Test harness: fixed camera. */
   override: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null;
 
@@ -89,9 +92,9 @@ export class CameraRig {
       const right = _w.set(-back.z, 0, back.x);
       // Offset over the right shoulder and raised so the general stays visible beside and
       // above the shinobi instead of hiding behind him.
-      const dist = 3.3 + clamp(d - 3, 0, 6) * 0.2;
-      P.copy(player).addScaledVector(back, dist).addScaledVector(right, -1.35);
-      P.y = player.y * 0.6 + 2.2 + clamp(3 - d, 0, 3) * 0.12;
+      const dist = 3.3 + this.frameBack + clamp(d - 3, 0, 6) * 0.2;
+      P.copy(player).addScaledVector(back, dist).addScaledVector(right, -1.35 - this.frameBack * 0.35);
+      P.y = player.y * 0.6 + 2.2 + this.frameUp + clamp(3 - d, 0, 3) * 0.12;
       L.copy(playerChest).lerp(bossChest, 0.6);
       L.y = lerp(playerChest.y, bossChest.y, 0.5) - 0.2;
       this.yaw = Math.atan2(-back.x, -back.z);
@@ -113,10 +116,10 @@ export class CameraRig {
     } else if (this.mode === "free") {
       this.yaw -= mouse.dx * 0.0026;
       this.pitch = clamp(this.pitch + mouse.dy * 0.002, -0.35, 0.8);
-      const r = 4.0;
+      const r = 4.0 + this.frameBack;
       P.set(
         player.x - Math.sin(this.yaw) * Math.cos(this.pitch) * r,
-        player.y + 1.6 + Math.sin(this.pitch) * r,
+        player.y + 1.6 + this.frameUp + Math.sin(this.pitch) * r,
         player.z - Math.cos(this.yaw) * Math.cos(this.pitch) * r,
       );
       L.copy(playerChest).setY(playerChest.y + 0.15);

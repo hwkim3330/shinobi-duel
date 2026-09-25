@@ -1,0 +1,8 @@
+{
+  "name": "shinobi-duel-server",
+  "private": true,
+  "type": "module",
+  "description": "Lobby, WebRTC signaling and fallback relay for Shinobi Duel online; also serves the built game.",
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": { "ws": "^8.18.0" }
+}

@@ -11,10 +11,12 @@
 import * as THREE from "three";
 import { approachAngle, clamp, damp, rng } from "../core/math";
 import type { Timeline } from "../chars/animEvents";
+import type { Input } from "../core/Input";
 import type { Fighter } from "../chars/Fighter";
 import { ARENA_HALF, RIDGE_Z } from "../world/Arena";
 import { vitalityRegen } from "./Player";
 import { DIFFICULTY } from "./difficulty";
+import { loadFields, saveFields } from "./state";
 
 export type Peril = "thrust" | "sweep" | "grab";
 
@@ -182,7 +184,9 @@ export type BState =
   | "rise"
   | "finished"
   | "dead"
-  | "wait";
+  | "wait"
+  /** A human general's back / side step (i-frames at the start, like hers). */
+  | "evade";
 
 /** States in which his guard is down: player cuts land in full and flinch him. */
 export const OPEN: ReadonlySet<BState> = new Set<BState>(["recoil", "flinch", "recover", "whiff", "mikiried", "kicked"]);
@@ -194,6 +198,45 @@ export const DEATHBLOW_WINDOW = 4.0;
 const HEAL_CLOSE = 2.6;
 /** Rising for the second life takes this long (he is back on the player within ~1.5-2 s). */
 const RISE_T = 1.6;
+
+/**
+ * A human at the general's controls (the "play as the general" mode and netplay). The AI brain
+ * is switched off: he moves, guards and picks each attack from his own keys; everything the
+ * attack does once started (timings, lunges, strings, openings, breaks, deathblows) is the same
+ * data the AI fights with. Perilous attacks share a cooldown so they can't be chained back to
+ * back (the AI's rule), strings follow only where the AI's strings do.
+ */
+export const PILOT = {
+  walk: 2.3,
+  run: 4.0,
+  guardWalk: 1.2,
+  /** Seconds between perilous attacks (from the start of one to the start of the next), per phase. */
+  perilCD: [3.2, 2.4] as [number, number],
+  leapCD: 4.0,
+  leapMin: 2.8,
+  /** Step: duration, i-frames, launch speed. */
+  evadeT: 0.55,
+  evadeI: 0.3,
+  evadeV: 7.5,
+  evadeCD: 0.35,
+  /** What each attack may be followed by, pressed during its tail (phase 1 / phase 2). */
+  follow: [
+    { leap: ["thrust", "sweep"] },
+    { leap: ["thrust", "sweep", "flurry"], flurry: ["thrust"], combo: ["grab"], comboDelay: ["sweep"] },
+  ] as Record<string, string[]>[],
+};
+/** The general's attack keys, in the order they are read. */
+const PILOT_KEYS = [
+  ["thrust", "thrust"],
+  ["sweep", "sweep"],
+  ["grab", "grab"],
+  ["leap", "leap"],
+  ["flurry", "flurry"],
+  ["feint", "comboDelay"],
+  ["heavy", "overhead"],
+  ["attack", "combo"],
+] as const;
+const PERILOUS = new Set(["thrust", "sweep", "grab"]);
 
 /** What the general can see of the player this step (set by the game). */
 export interface PlayerSense {
@@ -264,6 +307,15 @@ export class Boss {
   readonly events: string[] = [];
   /** Freeze the brain (title screen, scripted shots). */
   passive = false;
+  /** A human at his controls (null: the AI brain). */
+  pilot: Input | null = null;
+  /** The pilot's camera heading this step (camera-relative movement). */
+  pilotYaw = 0;
+  /** Pilot cooldowns (seconds, gameplay time). */
+  perilCD = 0;
+  leapCD = 0;
+  evadeCD = 0;
+  private evadeDir = new THREE.Vector3();
 
   constructor(readonly ch: Fighter) {
     ch.rig.onStep = () => this.events.push("step");
@@ -292,6 +344,7 @@ export class Boss {
     this.tempo = 1;
     this.queue = ["leap", "combo", "thrust", "comboDelay", "overhead", "sweep"];
     this.R = rng(9);
+    this.perilCD = this.leapCD = this.evadeCD = 0;
     this.events.length = 0;
     this.clipNow = "";
     this.setClip("idle", 0);
@@ -349,7 +402,11 @@ export class Boss {
     this.hitDone = a.hits.map(() => false);
     this.moveAllow = a.moves.map(() => -1);
     this.guarded = false;
-    this.follow = this.pickFollow(name);
+    this.follow = this.pilot ? null : this.pickFollow(name);
+    if (this.pilot) {
+      if (PERILOUS.has(name)) this.perilCD = PILOT.perilCD[this.phase - 1];
+      if (name === "leap") this.leapCD = PILOT.leapCD;
+    }
     this.followAt = this.follow && a.hits.length ? a.hits[a.hits.length - 1].t1 + 0.4 : Infinity;
     this.enter("attack");
     this.stateT = t0;
@@ -412,6 +469,9 @@ export class Boss {
     this.time += dt;
     this.stateT += dt;
     this.postureIdle += dt;
+    this.perilCD -= dt;
+    this.leapCD -= dt;
+    this.evadeCD -= dt;
     const s0 = this.state;
     const noRegen =
       s0 === "attack" || s0 === "stagger" || s0 === "mikiried" || s0 === "kicked" || s0 === "finished" || s0 === "deathblown" || s0 === "rise" || s0 === "throw" || s0 === "dead";
@@ -435,6 +495,10 @@ export class Boss {
         if (!this.passive) this.enter("idle");
         break;
       case "idle": {
+        if (this.pilot) {
+          this.pilotIdle(dt, face, dist);
+          break;
+        }
         this.yaw = approachAngle(this.yaw, face, dt * 4.5);
         this.strafeT -= dt;
         if (this.strafeT <= 0) {
@@ -532,6 +596,13 @@ export class Boss {
           this.cooldown = 0.3;
           break;
         }
+        if (this.pilot && !this.follow && a.hits.length && t > a.hits[a.hits.length - 1].t0) {
+          const f = this.pilotFollow(a.name);
+          if (f) {
+            this.follow = f;
+            this.followAt = Math.max(t, a.hits[a.hits.length - 1].t1 + 0.25);
+          }
+        }
         if (this.follow && t >= this.followAt && !down) {
           const f = this.follow;
           this.follow = null;
@@ -552,6 +623,16 @@ export class Boss {
       case "block":
         this.vel.multiplyScalar(Math.exp(-dt * 8));
         this.yaw = approachAngle(this.yaw, face, dt * 5);
+        if (this.pilot) {
+          // Straight out of the guard into an answer, or back to his feet.
+          const a = this.stateT > 0.12 && !this.passive ? this.pilotPick(dist) : null;
+          if (a) this.startAttack(a);
+          else if (this.stateT > 0.3) {
+            this.enter("idle");
+            this.setClip(this.pilot.isHeld("block") ? "guard" : "idle", 0.15);
+          }
+          break;
+        }
         if (this.pendingCounter) {
           // Turned a cut aside: a beat on guard, then the answer.
           if (this.stateT >= DIFFICULTY.counterDelay) {
@@ -622,6 +703,13 @@ export class Boss {
         }
         break;
       }
+      case "evade": {
+        const u = clamp(this.stateT / PILOT.evadeT, 0, 1);
+        this.vel.copy(this.evadeDir).multiplyScalar(PILOT.evadeV * Math.pow(1 - u, 1.6));
+        this.yaw = approachAngle(this.yaw, face, dt * 6);
+        if (this.stateT >= PILOT.evadeT) this.backToIdle(0);
+        break;
+      }
       case "deathblown":
       case "finished":
       case "dead":
@@ -654,6 +742,17 @@ export class Boss {
    * aside more and more often (phase 1 guards more than phase 2).
    */
   guard(): "block" | "deflect" {
+    if (this.pilot) {
+      this.postureIdle = 0;
+      if (this.pilotDeflects()) {
+        this.pilot.consume("block", 10);
+        this.pilot.resetMash();
+        return "deflect";
+      }
+      this.enter("block");
+      this.setClip("block", 0.05);
+      return "block";
+    }
     if (this.time - this.lastGuardT > 1.3) this.guardHits = 0;
     this.lastGuardT = this.time;
     this.guardHits++;
@@ -675,7 +774,8 @@ export class Boss {
     // be deflected. Half the time it's the flurry, else the three-cut combo.
     this.attack = null;
     this.follow = null;
-    this.pendingCounter = this.R() < DIFFICULTY.counterFlurry ? "flurry" : "combo";
+    // A human answers himself (the guard state lets him attack straight out of it).
+    this.pendingCounter = this.pilot ? null : this.R() < DIFFICULTY.counterFlurry ? "flurry" : "combo";
     this.enter("block");
     this.setClip("guard", 0.1);
   }
@@ -701,7 +801,7 @@ export class Boss {
     this.openHits++;
     if (this.openHits < DIFFICULTY.openHits || this.state === "stagger") return false;
     this.openHits = 0;
-    if (this.phase === 2) {
+    if (this.phase === 2 && !this.pilot) {
       const q = this.queue[0];
       if (q && q !== "leap") this.startAttack(this.queue.shift()!);
       else this.startAttack(this.R() < 0.6 ? "flurry" : "grab");
@@ -789,6 +889,95 @@ export class Boss {
     this.events.push("rise");
   }
 
+  // ------------------------------------------------------------------ human pilot
+
+  /** His guard is up (held, or a fresh tap inside the deflect window). */
+  pilotGuarding(): boolean {
+    return !!this.pilot && (this.pilot.isHeld("block") || this.pilotDeflects());
+  }
+
+  /** A guard tap close enough before the blade's arrival turns it aside (her rule, and her anti-mash). */
+  private pilotDeflects(): boolean {
+    const inp = this.pilot;
+    if (!inp) return false;
+    const pt = inp.peekPressTime("block");
+    return pt !== undefined && inp.clock - pt <= Math.min(DIFFICULTY.deflectEarly, inp.deflectWindow);
+  }
+
+  /** i-frames of his step. */
+  get evading(): boolean {
+    return this.state === "evade" && this.stateT < PILOT.evadeI;
+  }
+
+  /** The attack his keys ask for (null: none, or it's on cooldown / not in this phase's moveset). */
+  private pilotPick(dist: number): string | null {
+    const inp = this.pilot!;
+    const p2 = this.phase === 2;
+    for (const [key, attack] of PILOT_KEYS) {
+      if (!inp.consume(key, 0.3)) continue;
+      if (PERILOUS.has(attack) && this.perilCD > 0) continue;
+      if ((attack === "grab" || attack === "flurry") && !p2) continue;
+      if (attack === "leap" && (this.leapCD > 0 || dist < PILOT.leapMin)) continue;
+      return attack;
+    }
+    return null;
+  }
+
+  /** A follow-up pressed in the tail of a string (only where the AI's strings go). */
+  private pilotFollow(from: string): string | null {
+    const allowed = PILOT.follow[this.phase - 1][from];
+    if (!allowed) return null;
+    const inp = this.pilot!;
+    for (const [key, attack] of PILOT_KEYS) {
+      if (!allowed.includes(attack)) continue;
+      if (inp.consume(key, 0.3)) return attack;
+    }
+    return null;
+  }
+
+  private pilotIdle(dt: number, face: number, dist: number): void {
+    const inp = this.pilot!;
+    this.yaw = approachAngle(this.yaw, face, dt * 5);
+    const ax = inp.axis();
+    const fx = Math.sin(this.pilotYaw);
+    const fz = Math.cos(this.pilotYaw);
+    const move = new THREE.Vector3(fx * ax.y - fz * ax.x, 0, fz * ax.y + fx * ax.x);
+    const moving = move.lengthSq() > 0.01;
+    const guarding = inp.isHeld("block");
+    if (this.passive) {
+      this.vel.multiplyScalar(Math.exp(-dt * 8));
+      return;
+    }
+    // Shift: a tap steps (i-frames), holding it runs.
+    if (!guarding && this.evadeCD <= 0 && inp.consume("dodge", 0.2)) {
+      if (moving) this.evadeDir.copy(move).normalize();
+      else this.evadeDir.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+      this.evadeCD = PILOT.evadeT + PILOT.evadeCD;
+      this.enter("evade");
+      this.setClip("evade", 0.06);
+      this.events.push("evade");
+      return;
+    }
+    const run = !guarding && inp.isHeld("dodge") && inp.heldFor("dodge") > 0.2;
+    const speed = guarding ? PILOT.guardWalk : run ? PILOT.run : PILOT.walk;
+    const want = moving ? move.normalize().multiplyScalar(speed * Math.min(1, Math.hypot(ax.x, ax.y))) : move.set(0, 0, 0);
+    this.vel.lerp(want, damp(8, dt));
+    const clip = guarding ? "guard" : this.vel.length() > 0.4 ? "walk" : "idle";
+    if (this.clipNow !== clip) this.setClip(clip, clip === "guard" ? 0.1 : 0.25);
+    const a = this.pilotPick(dist);
+    if (a) this.startAttack(a);
+  }
+
+  /** Netplay resync: his gameplay state (the body is re-posed from it on the next step). */
+  saveState(): Record<string, unknown> {
+    return saveFields(this, ["ch", "events", "pilot", "R"], { R: this.R.state });
+  }
+
+  loadState(o: Record<string, unknown>): void {
+    loadFields(this, o);
+    this.R.state = o.R as number;
+  }
+
   step(dt: number, wind: THREE.Vector3, t: number): void {
     this.ch.rig.root.position.copy(this.pos);
     this.ch.rig.yaw = this.yaw;
@@ -799,3 +988,4 @@ export class Boss {
       this.state === "attack" && !!a && a.perilous !== "grab" && a.hits.some((h, i) => (!this.hitDone[i] || this.stateT < h.t1) && this.stateT > h.t0 - 0.06 && this.stateT < h.t1);
   }
 }
+

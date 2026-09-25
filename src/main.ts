@@ -4,13 +4,26 @@ import { activeDifficulty, DIFFICULTY, DIFFICULTY_PRESETS, type DifficultyName }
 import { Input } from "./core/Input";
 import { deflectPosture, Game, KICK_HEAD_POSTURE, MIKIRI_POSTURE } from "./game/Game";
 import { GOURD, REZ } from "./game/Player";
+import { Lockstep, type Role } from "./net/Lockstep";
+import { type CtlMsg, signalURL, Transport } from "./net/Transport";
+import { Menu, type TitleMode } from "./ui/Menu";
+
+declare const __BUILD__: string;
+const BUILD = typeof __BUILD__ === "string" ? __BUILD__ : "dev";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const hud = document.getElementById("hud") as HTMLElement;
 const game = new Game(canvas, hud);
+const urlq = new URLSearchParams(location.search);
+const onlineRoom = urlq.get("room");
+const onlineQuick = urlq.has("quick");
+const online = !!onlineRoom || onlineQuick;
+// An online page never runs the title's simulation: both browsers start the duel from the
+// state the page was built in (bodies loaded, nothing stepped).
+if (online) game.netLobby = true;
 game.start();
 const bodies = loadBodies({ player: game.shinobi, boss: game.general }, (who, body) => game.useBody(who, body));
-if (new URLSearchParams(location.search).get("debug") === "anim") void import("./debug/AnimDebug").then((m) => m.mountAnimDebug(game));
+if (urlq.get("debug") === "anim") void import("./debug/AnimDebug").then((m) => m.mountAnimDebug(game));
 
 type SceneName = "title" | "fight" | "thrust" | "overhead" | "deflect" | "break" | "finisher" | "finisher2" | "victory" | "portrait" | "portrait2" | "closeP" | "closeB" | "closeP2";
 
@@ -229,3 +242,165 @@ if (import.meta.env.DEV) {
     exporter: () => import("three/addons/exporters/GLTFExporter.js"),
   };
 }
+
+// ------------------------------------------------------------------ modes and netplay
+
+const menu = new Menu();
+const TITLE_MODE_KEY = "shinobi-duel.mode";
+function loadTitleMode(): TitleMode {
+  const q = urlq.get("mode");
+  if (q === "general" || q === "solo") return q;
+  try {
+    const v = localStorage.getItem(TITLE_MODE_KEY);
+    if (v === "general" || v === "solo") return v;
+  } catch {
+    /* storage blocked */
+  }
+  return "solo";
+}
+function pickTitleMode(m: TitleMode): void {
+  if (game.state !== "title" || online) return;
+  game.setMode(m);
+  game.hud.showControls(m === "general" ? "general" : "shinobi");
+  menu.setMode(m);
+  try {
+    localStorage.setItem(TITLE_MODE_KEY, m);
+  } catch {
+    /* storage blocked */
+  }
+}
+menu.onMode = pickTitleMode;
+menu.onOnline = (room, as) => {
+  const u = new URL(location.href);
+  u.search = "";
+  if (room) u.searchParams.set("room", room);
+  else u.searchParams.set("quick", "1");
+  u.searchParams.set("as", as);
+  u.searchParams.set("host", room ? "1" : "0");
+  location.href = u.toString();
+};
+const leave = () => {
+  transport?.close();
+  const u = new URL(location.href);
+  u.search = "";
+  location.href = u.toString();
+};
+menu.onLeave = leave;
+game.onNet = (e) => {
+  if (e === "leave") leave();
+};
+if (!online) pickTitleMode(loadTitleMode());
+
+let transport: Transport | null = null;
+let lockstep: Lockstep | null = null;
+
+if (online) {
+  game.hud.showTitle(false);
+  menu.showModes(false);
+  const pref: Role = urlq.get("as") === "general" ? "general" : "shinobi";
+  menu.showLobby(onlineRoom, urlq.get("host") === "1", "reaching the lobby…");
+  let peerHello: { v: string; bodies: string; ready: boolean; as: Role } | null = null;
+  let started = false;
+  let measuring = false;
+  const pongs: number[] = [];
+  const bodyKinds = () => `${game.playerBody.kind}/${game.bossBody.kind}`;
+  const hello = () => transport?.sendCtl({ t: "hello", v: BUILD, bodies: bodyKinds(), ready: !!window.__duel.ready, as: pref });
+  const begin = (role: Role, delay: number, d: DifficultyName) => {
+    if (started) return;
+    started = true;
+    lockstep = new Lockstep(transport!, role, delay);
+    game.attachNet(lockstep);
+    game.hud.showControls(role);
+    menu.hideLobby();
+    game.netStart(d);
+  };
+  const maybeStart = () => {
+    if (!transport?.host || started || measuring || !peerHello || !window.__duel.ready || !peerHello.ready) return;
+    if (peerHello.v !== BUILD) return menu.showError("You and your opponent are on different versions of the game. Both reload the page and try again.");
+    if (peerHello.bodies !== bodyKinds()) return menu.showError(`The fighters loaded differently on the two machines (${bodyKinds()} here, ${peerHello.bodies} there). Both reload and try again.`);
+    measuring = true;
+    menu.lobbyStatus(transport.path === "p2p" ? "linked directly · measuring…" : "finding a direct link…");
+    // Give the direct link a few seconds to come up, then time the round trip on the best path.
+    const t0 = performance.now();
+    const probe = () => {
+      if (transport!.path !== "p2p" && performance.now() - t0 < 5000) return void setTimeout(probe, 200);
+      let n = 0;
+      const tick = () => {
+        transport!.sendCtl({ t: "ping", at: performance.now() });
+        if (++n < 8) setTimeout(tick, 120);
+        else
+          setTimeout(() => {
+            const rtt = pongs.length ? pongs.sort((a, b) => a - b)[Math.floor(pongs.length / 2)] : 250;
+            // Input delay covers half the round trip (plus a little jitter room), at 120 Hz.
+            const delay = Math.max(3, Math.min(40, Math.ceil(rtt / 2 / (1000 / 120)) + 2));
+            const hostRole = pref;
+            transport!.sendCtl({ t: "start", delay, hostRole, d: "medium" });
+            begin(hostRole, delay, "medium");
+          }, 400);
+      };
+      tick();
+    };
+    probe();
+  };
+  const onCtl = (m: CtlMsg) => {
+    if (lockstep?.ctl(m)) return;
+    if (m.t === "hello") {
+      peerHello = m as unknown as typeof peerHello;
+      menu.lobbyStatus(peerHello!.ready ? "opponent here · getting ready…" : "opponent here · their castle is still loading…");
+      maybeStart();
+    } else if (m.t === "ping") transport?.sendCtl({ t: "pong", at: m.at });
+    else if (m.t === "pong") pongs.push(performance.now() - (m.at as number));
+    else if (m.t === "start") {
+      const hostRole = m.hostRole as Role;
+      begin(hostRole === "shinobi" ? "general" : "shinobi", m.delay as number, (m.d as DifficultyName) ?? "medium");
+    }
+  };
+  transport = new Transport(signalURL(), {
+    onJoined: (room, host) => {
+      menu.showLobby(onlineRoom ? room : null, host, host ? "waiting for your opponent…" : "joining…");
+    },
+    onPeer: () => {
+      menu.lobbyStatus("opponent found · linking…");
+      hello();
+    },
+    onCtl,
+    onInp: (b) => lockstep?.onPacket(b),
+    onPath: (p) => {
+      if (!started) menu.lobbyStatus(p === "p2p" ? "linked directly" : "linked through the relay");
+      maybeStart();
+    },
+    onClosed: (why) => menu.showError(started ? `The duel was cut: ${why}.` : `Couldn't start the duel: ${why}.`),
+  });
+  transport.open(onlineRoom ? onlineRoom.toUpperCase() : null, BUILD);
+  // Tell the other side once the castle has loaded here.
+  const readyWait = setInterval(() => {
+    if (!window.__duel.ready) return;
+    clearInterval(readyWait);
+    hello();
+    maybeStart();
+  }, 250);
+}
+
+// Per frame: which panels show, the connection line, the general's move panel.
+function menuFrame(): void {
+  const st = game.state;
+  const fighting = st === "fight" || st === "deathblow" || st === "finisher" || st === "dying";
+  if (!online) menu.showModes(st === "title");
+  const b = game.boss;
+  const p = game.player;
+  menu.pilot(game.localRole === "general" && (st === "fight" || st === "deathblow"), {
+    perilCD: b.perilCD,
+    leapCD: b.leapCD,
+    phase: b.phase,
+    dist: Math.hypot(b.pos.x - p.pos.x, b.pos.z - p.pos.z),
+  });
+  if (lockstep && transport) {
+    const ms = Math.round(lockstep.rtt);
+    const path = transport.path === "p2p" ? "P2P" : "RELAY";
+    const sync = lockstep.desyncs ? `  ·  resync ${lockstep.resyncs}` : "";
+    menu.netLine(`${path}  ·  ${ms} ms  ·  delay ${lockstep.delay}${sync}`);
+    menu.waiting(fighting && lockstep.stalledFor > 0.4);
+  }
+  requestAnimationFrame(menuFrame);
+}
+requestAnimationFrame(menuFrame);

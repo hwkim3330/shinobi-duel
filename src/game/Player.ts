@@ -14,6 +14,7 @@ import { cueOf } from "../chars/animEvents";
 import type { Fighter } from "../chars/Fighter";
 import { ARENA_HALF, RIDGE_Z } from "../world/Arena";
 import { DIFFICULTY } from "./difficulty";
+import { loadFields, saveFields } from "./state";
 
 export type PState =
   | "move"
@@ -607,6 +608,15 @@ export class Player {
     this.vel.set(0, 0, 0);
     this.enter("revive");
     this.setClip("revive", 0.15);
+  }
+
+  /** Netplay resync: her gameplay state. */
+  saveState(): Record<string, unknown> {
+    return saveFields(this, ["ch", "events"]);
+  }
+
+  loadState(o: Record<string, unknown>): void {
+    loadFields(this, o);
   }
 
   step(dt: number, wind: THREE.Vector3, t: number): void {

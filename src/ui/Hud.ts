@@ -21,6 +21,7 @@ const CSS = /* css */ `
 #title .t-stroke { width: min(40vw, 540px); height: auto; margin-top: -1.2vh; opacity: 0.75; }
 #title .press { position: absolute; right: 7vw; bottom: 9vh; height: 30px; width: auto; opacity: 0.8; animation: breathe 3.6s ease-in-out infinite; }
 #title .keys { position: absolute; left: 4vw; bottom: 7vh; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; opacity: 0.72; width: max-content; }
+#title .keys.hidden-keys { display: none; }
 #title .keys img { height: min(2.6vh, 22px); width: auto; flex: none; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.9)); }
 /* the begin prompt is clickable; its mousedown bubbles to Input as a title "any key" press */
 #title:not(.hidden) .press.begin { pointer-events: auto; cursor: pointer; }
@@ -176,6 +177,17 @@ const PROMPTS: Record<EndKind, string> = {
   defeat: "Enter / click  ·  duel again          Esc  ·  title",
   victory: "Enter / click  ·  title",
 };
+/** End-screen lines when a human has the general (vs the AI kunoichi, or online). */
+const PROMPTS_GENERAL: Record<EndKind, string> = {
+  death: "she stirs on the tiles  ·  will she rise",
+  defeat: "Enter / click  ·  duel again          Esc  ·  title",
+  victory: "Enter / click  ·  duel again          Esc  ·  title",
+};
+const PROMPTS_ONLINE: Record<EndKind, string> = {
+  death: "E / Enter / click  ·  rise again          Esc  ·  accept death",
+  defeat: "Enter / click  ·  rematch          Esc  ·  leave",
+  victory: "Enter / click  ·  rematch          Esc  ·  leave",
+};
 const CONTROLS = [
   "LMB / J  strike   ·   hold  charged cut",
   "RMB / K  guard   ·   tap as it lands  deflect",
@@ -183,6 +195,15 @@ const CONTROLS = [
   "Shift  step   ·   hold  run   ·   into a thrust  mikiri",
   "Space  jump   ·   again at him  kick        R  gourd",
   "A / D  ·  1 2 3  ·  click  difficulty",
+];
+/** The general's keys (vs the AI kunoichi, or online). */
+const GENERAL_CONTROLS = [
+  "LMB / J  three-cut string   ·   F  overhead   ·   C  delayed string",
+  "RMB / K  guard   ·   tap as her cut lands  deflect",
+  "Q  thrust   ·   E  sweep   ·   R  grab   ·   X  flurry      (危 perilous)",
+  "Space  leap in   ·   Shift  step   ·   hold  run        WASD  move",
+  "next attack at the end of a string  ·  leap → thrust / sweep",
+  "A / D  ·  1 2 3  ·  click  her skill",
 ];
 const DIFFS: { id: DifficultyName; kanji: string; latin: string }[] = [
   { id: "easy", kanji: "易", latin: "Easy" },
@@ -256,10 +277,17 @@ export class Hud {
     titlePress.classList.add("begin");
     this.title.appendChild(titlePress);
     const keys = el("div", "keys", this.title);
+    const gkeys = el("div", "keys hidden-keys", this.title);
+    this.keyLists = [keys, gkeys];
     CONTROLS.forEach((line, i) => {
       const img = new Image();
       img.src = brushText(line, { size: 26, font: LATIN_FONT, weight: 400, color: "#e8dfd0", seed: 40 + i, dry: 0.25, splatter: 0, letterSpacing: 0.08, pad: 4 }).toDataURL();
       keys.appendChild(img);
+    });
+    GENERAL_CONTROLS.forEach((line, i) => {
+      const img = new Image();
+      img.src = brushText(line, { size: 26, font: LATIN_FONT, weight: 400, color: "#e8dfd0", seed: 140 + i, dry: 0.25, splatter: 0, letterSpacing: 0.08, pad: 4 }).toDataURL();
+      gkeys.appendChild(img);
     });
     const diff = el("div", "diff", this.title);
     DIFFS.forEach((d, i) => {
@@ -399,6 +427,14 @@ export class Hud {
     return u;
   }
 
+  private keyLists: HTMLElement[] = [];
+
+  /** The title's key list: hers, or the general's. */
+  showControls(role: "shinobi" | "general"): void {
+    this.keyLists[0]?.classList.toggle("hidden-keys", role !== "shinobi");
+    this.keyLists[1]?.classList.toggle("hidden-keys", role !== "general");
+  }
+
   showTitle(on: boolean): void {
     this.title.classList.toggle("hidden", !on);
   }
@@ -435,7 +471,7 @@ export class Hud {
     this.kanjiURL("敗北", "#b3261a", 32);
     this.kanjiURL("再起", "#d8e4e6", 33);
     for (const t of ["VICTORY", "DEFEAT", "RISE AGAIN"]) this.latinURL(t);
-    for (const k of Object.values(PROMPTS)) this.smallURL(k);
+    for (const k of [...Object.values(PROMPTS), ...Object.values(PROMPTS_GENERAL), ...Object.values(PROMPTS_ONLINE)]) this.smallURL(k);
   }
 
   /** Death with a resurrection left: rise again, or accept death. */
@@ -449,10 +485,31 @@ export class Hud {
     else this.show(kind, this.kanjiURL("敗北", "#b3261a", 32), this.latinURL("DEFEAT"));
   }
 
+  private role: "shinobi" | "general" = "shinobi";
+  private mode: "solo" | "general" | "online" = "solo";
+
+  /** Who the local player is: the end screens speak to them. */
+  setRole(role: "shinobi" | "general", mode: "solo" | "general" | "online"): void {
+    this.role = role;
+    this.mode = mode;
+    this.fight.classList.toggle("as-general", role === "general");
+  }
+
+  private promptFor(kind: EndKind): string {
+    if (this.mode === "online") return kind === "death" && this.role === "general" ? PROMPTS_GENERAL.death : PROMPTS_ONLINE[kind];
+    if (this.role === "general") return PROMPTS_GENERAL[kind];
+    return PROMPTS[kind];
+  }
+
+  /** Swap the prompt line under the end word (netplay: "waiting for the other player"). */
+  promptText(text: string): void {
+    this.ePress.src = this.smallURL(text);
+  }
+
   private show(kind: EndKind, kanji: string, latin: string): void {
     this.eKanji.src = kanji;
     this.eLatin.src = latin;
-    this.ePress.src = this.smallURL(PROMPTS[kind]);
+    this.ePress.src = this.smallURL(this.promptFor(kind));
     this.end.dataset.kind = kind;
     this.end.classList.remove("hidden", "show", "prompt");
     void this.end.offsetWidth;

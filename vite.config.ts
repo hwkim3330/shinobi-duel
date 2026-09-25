@@ -1,6 +1,16 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
+import { execSync } from "node:child_process";
 import { defineConfig, type Plugin } from "vite";
+
+/** Build id: netplay only pairs two copies of the same build (the lockstep needs identical code). */
+function buildId(): string {
+  try {
+    return execSync("git rev-parse --short=10 HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  } catch {
+    return "local";
+  }
+}
 
 // GitHub Pages serves under /shinobi-duel/ (GITHUB_PAGES=1 in the workflow); everything else
 // (dev, Vercel, any static host) uses a relative base.
@@ -57,6 +67,7 @@ function charAssets(): Plugin {
 
 export default defineConfig({
   base,
+  define: { __BUILD__: JSON.stringify(process.env.DUEL_BUILD ?? buildId()) },
   plugins: [charAssets()],
   server: { port: 5411, strictPort: true, open: false },
   preview: { port: 5410, strictPort: true, open: false },

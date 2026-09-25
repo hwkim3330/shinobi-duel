@@ -4,7 +4,7 @@ import { chromium } from "playwright";
 
 export const URL = process.env.DUEL_URL ?? "http://localhost:5411/";
 
-export async function launch({ width = 1600, height = 900 } = {}) {
+export async function launch({ width = 1600, height = 900, url = process.env.DUEL_URL ?? URL } = {}) {
   // DUEL_VIEW=960x540 forces a small viewport (light GPU load while the machine is shared).
   const view = /^(\d+)x(\d+)$/.exec(process.env.DUEL_VIEW ?? "");
   if (view) [width, height] = [+view[1], +view[2]];
@@ -12,7 +12,7 @@ export async function launch({ width = 1600, height = 900 } = {}) {
     channel: "chromium",
     headless: true,
     args: [
-      "--use-angle=d3d11",
+      ...(process.platform === "win32" ? ["--use-angle=d3d11"] : ["--use-angle=vulkan", "--enable-features=Vulkan"]),
       "--use-gl=angle",
       "--enable-gpu",
       "--enable-gpu-rasterization",
@@ -30,7 +30,7 @@ export async function launch({ width = 1600, height = 900 } = {}) {
   });
   page.on("pageerror", (e) => errors.push(`page: ${e.message}`));
   page.on("crash", () => console.log("!! page crashed"));
-  await page.goto(URL, { waitUntil: "load" });
+  await page.goto(url, { waitUntil: "load" });
   await page.waitForFunction(() => window.__duel && window.__duel.ready, null, { timeout: 60000 });
   const renderer = await page.evaluate(() => window.__duel.stats().renderer);
   if (/swiftshader|llvmpipe|basic render|software/i.test(renderer)) {

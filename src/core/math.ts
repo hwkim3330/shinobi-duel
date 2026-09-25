@@ -24,15 +24,27 @@ export function approachAngle(a: number, b: number, maxStep: number): number {
 }
 
 /** Seeded PRNG (mulberry32): all visual randomness is reproducible for screenshots. */
-export function rng(seed: number): () => number {
+export interface Rng {
+  (): number;
+  /** Generator state, for netplay resyncs. */
+  state: number;
+}
+export function rng(seed: number): Rng {
   let s = seed >>> 0;
-  return () => {
+  const f = (() => {
     s = (s + 0x6d2b79f5) >>> 0;
     let t = s;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+  }) as Rng;
+  Object.defineProperty(f, "state", {
+    get: () => s,
+    set: (v: number) => {
+      s = v >>> 0;
+    },
+  });
+  return f;
 }
 
 /** Closest distance between segments p1-q1 and p2-q2; writes closest points. */

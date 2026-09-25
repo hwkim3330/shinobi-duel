@@ -262,6 +262,7 @@ export class General extends Character {
       ]),
       mikiried: new Clip("mikiried", [k(0, PINNED), k(0.65, pose(PINNED, { chestPitch: 0.66 })), k(1.05, pose(RECOIL, { hipY: -0.14 })), k(1.6, S)]),
       kicked: new Clip("kicked", [k(0, S), k(0.08, KICKED), k(0.55, pose(KICKED, { hipY: -0.16 })), k(1.0, S)]),
+      evade: new Clip("evade", [k(0, S), k(0.12, pose(RECOIL, { hipY: -0.14 })), k(0.55, S)]),
       whiff: new Clip("whiff", [k(0, G_MISS), k(0.5, pose(G_MISS, { hipY: -0.2 })), k(0.9, S)]),
       rise: new Clip("rise", [k(0, KNEEL), k(0.5, RISE_UP), k(0.9, RISE_ROAR), k(1.2, pose(RISE_ROAR, { head: -0.2 })), k(1.6, S)]),
       deathblown: new Clip("deathblown", [k(0, KNEEL), k(0.16, ARCH), k(0.8, pose(ARCH, { chestPitch: -0.42 })), k(1.2, KNEEL2), k(1.5, KNEEL2)]),

@@ -10,7 +10,11 @@
  */
 import { DIFFICULTY } from "../game/difficulty";
 
-export type Action = "attack" | "block" | "dodge" | "jump" | "lock" | "heal";
+export type Action = "attack" | "block" | "dodge" | "jump" | "lock" | "heal" | "heavy" | "thrust" | "sweep" | "grab" | "leap" | "feint" | "flurry";
+/** Every action, in the bit order of a netplay input frame. */
+export const ACTIONS: readonly Action[] = ["attack", "block", "dodge", "jump", "lock", "heal", "heavy", "thrust", "sweep", "grab", "leap", "feint", "flurry"];
+/** Whose key map the keyboard follows: the kunoichi's, or the general's (a human at his controls). */
+export type KeyMap = "shinobi" | "general";
 export type PromptKey = "confirm" | "back";
 
 /**
@@ -39,7 +43,18 @@ export class Input {
   /** Every fresh key press (menus that need more than a prompt: the title's difficulty choice). */
   onKeyDown: ((code: string) => void) | null = null;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  /** Key map for the keyboard (the mouse buttons are the same for both). */
+  map: KeyMap = "shinobi";
+  /** Actions pressed since the last `sample()` (netplay: a tap between two ticks still counts). */
+  private taps = 0;
+
+  /**
+   * `canvas` null: a virtual controller with no DOM listeners, driven by press() / release() and
+   * `botAxis` (the AI kunoichi, and both fighters in a netplay match, where the inputs come from
+   * the lockstep frames).
+   */
+  constructor(private readonly canvas: HTMLCanvasElement | null) {
+    if (!canvas) return;
     window.addEventListener("keydown", (e) => {
       if (e.code === "Space" || e.code === "Tab") e.preventDefault();
       if (e.repeat) return;
@@ -87,6 +102,7 @@ export class Input {
   }
 
   private keyAction(code: string): Action | null {
+    if (this.map === "general") return this.generalAction(code);
     switch (code) {
       case "KeyJ":
         return "attack";
@@ -103,6 +119,40 @@ export class Input {
         return "lock";
       case "KeyR":
         return "heal";
+    }
+    return null;
+  }
+
+  /**
+   * The general's keys. J / K / Shift / Space / Tab mean what they mean for her (attack, guard,
+   * step or sprint, leap, lock); the rest of his moveset sits around WASD.
+   */
+  private generalAction(code: string): Action | null {
+    switch (code) {
+      case "KeyJ":
+        return "attack";
+      case "KeyK":
+      case "KeyL":
+        return "block";
+      case "ShiftLeft":
+      case "ShiftRight":
+        return "dodge";
+      case "Space":
+        return "leap";
+      case "KeyF":
+        return "heavy";
+      case "KeyQ":
+        return "thrust";
+      case "KeyE":
+        return "sweep";
+      case "KeyR":
+        return "grab";
+      case "KeyC":
+        return "feint";
+      case "KeyX":
+        return "flurry";
+      case "Tab":
+        return "lock";
     }
     return null;
   }
@@ -183,6 +233,7 @@ export class Input {
     if (a === "block") this.lastGuardPress = this.clock;
     set.add(src);
     this.pressed.set(a, this.clock);
+    this.taps |= 1 << ACTIONS.indexOf(a);
   }
 
   release(a: Action, src = "bot"): void {
@@ -231,11 +282,64 @@ export class Input {
     return this.isHeld(a) ? this.clock - (this.heldSince.get(a) ?? this.clock) : 0;
   }
 
+  /**
+   * Netplay: what the local player is doing right now, as bit masks over ACTIONS: held actions,
+   * and actions pressed since the previous sample (so a quick tap between two ticks is not lost).
+   */
+  sample(): { held: number; taps: number } {
+    let held = 0;
+    for (let i = 0; i < ACTIONS.length; i++) if (this.isHeld(ACTIONS[i])) held |= 1 << i;
+    const taps = this.taps;
+    this.taps = 0;
+    return { held, taps };
+  }
+
+  /** Netplay: replay a remote (or delayed local) frame's buttons on this virtual controller. */
+  applyFrame(held: number, taps: number): void {
+    for (let i = 0; i < ACTIONS.length; i++) {
+      const a = ACTIONS[i];
+      const bit = 1 << i;
+      const was = this.isHeld(a);
+      if (taps & bit) {
+        if (was) this.release(a, "net");
+        this.press(a, "net");
+        if (!(held & bit)) this.release(a, "net");
+      } else if (held & bit && !was) this.press(a, "net");
+      else if (!(held & bit) && was) this.release(a, "net");
+    }
+  }
+
+  /** Netplay resync: everything that decides what the next press does. */
+  saveState(): unknown {
+    return {
+      pressed: [...this.pressed],
+      held: [...this.held].map(([a, s]) => [a, [...s]]),
+      heldSince: [...this.heldSince],
+      mash: this.mash,
+      guardUp: this.guardUp,
+      lastGuardPress: this.lastGuardPress,
+      deflectWindow: this.deflectWindow,
+      botAxis: this.botAxis,
+    };
+  }
+
+  loadState(o: unknown): void {
+    const s = o as { pressed: [Action, number][]; held: [Action, string[]][]; heldSince: [Action, number][]; mash: number; guardUp: number; lastGuardPress: number; deflectWindow: number; botAxis: { x: number; y: number } | null };
+    this.pressed = new Map(s.pressed);
+    this.held = new Map(s.held.map(([a, l]) => [a, new Set(l)]));
+    this.heldSince = new Map(s.heldSince);
+    this.mash = s.mash;
+    this.guardUp = s.guardUp;
+    this.lastGuardPress = s.lastGuardPress;
+    this.deflectWindow = s.deflectWindow;
+    this.botAxis = s.botAxis;
+  }
+
   /** Test bot: overrides the movement keys when set. */
   botAxis: { x: number; y: number } | null = null;
 
   requestLock(): void {
-    if (document.pointerLockElement === this.canvas) return;
+    if (!this.canvas || document.pointerLockElement === this.canvas) return;
     try {
       const p = this.canvas.requestPointerLock?.() as unknown as Promise<void> | undefined;
       p?.catch?.(() => {});

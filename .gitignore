@@ -25,3 +25,7 @@ assets/mixamo/*
 # Big third-party source packs (the list and licences stay)
 assets/source/*
 !assets/source/LICENSES.md
+
+# netplay / capture output
+shots/
+server/node_modules/

@@ -7,6 +7,8 @@
  */
 export const FIXED_DT = 1 / 120;
 const MAX_FRAME_DT = 0.1;
+/** Most simulation time a stalled netplay step may owe (caught up at up to 16 steps a frame). */
+const MAX_BACKLOG = 0.25;
 
 export class Loop {
   private last = 0;
@@ -15,7 +17,8 @@ export class Loop {
   private handle = 0;
 
   constructor(
-    private readonly fixedUpdate: (dt: number) => void,
+    /** Returns false when the step can't run yet (netplay: waiting on the other player's input). */
+    private readonly fixedUpdate: (dt: number) => boolean | void,
     private readonly frameUpdate: (dt: number, alpha: number) => void,
   ) {}
 
@@ -33,11 +36,15 @@ export class Loop {
       this.acc += dt;
       let steps = 0;
       while (this.acc >= FIXED_DT && steps < 16) {
-        this.fixedUpdate(FIXED_DT);
+        if (this.fixedUpdate(FIXED_DT) === false) {
+          // Stalled: keep the time owed (bounded) so the steps catch up once the input lands.
+          this.acc = Math.min(this.acc, MAX_BACKLOG);
+          break;
+        }
         this.acc -= FIXED_DT;
         steps++;
       }
-      this.frameUpdate(dt, this.acc / FIXED_DT);
+      this.frameUpdate(dt, Math.min(1, this.acc / FIXED_DT));
       this.handle = requestAnimationFrame(tick);
     };
     this.handle = requestAnimationFrame(tick);

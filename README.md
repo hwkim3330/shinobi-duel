@@ -7,8 +7,15 @@ One sword duel in a browser tab: a kunoichi against a samurai general on a snowy
 dusk, fought the way Sekiro fights. You win by deflecting his blade until his posture breaks, not by
 whittling down a health bar, and then you drive the deathblow home. He gets up once, angrier.
 
-**Play it: https://starknightt.github.io/shinobi-duel/** — desktop Chrome or Edge, keyboard and
-mouse. Any key on the title starts the fight; that key also starts the sound.
+**Play it: https://hwkim3330.github.io/shinobi-duel/** (or on the Hugging Face Space,
+https://huggingface.co/spaces/kimhyunwoo/shinobi-duel) — desktop Chrome or Edge, keyboard and
+mouse. Pick a side on the title: 忍 the kunoichi against the AI general (the original fight),
+将 the general against an AI kunoichi, or 対 an online duel against another player.
+
+> This is a fork of [StarKnightt/shinobi-duel](https://github.com/StarKnightt/shinobi-duel) that
+> adds the general as a playable fighter, an AI kunoichi, and online 1v1. See
+> [Online and the general](#online-and-the-general). 원작 1인 결투에 장수 조작 모드, AI 쿠노이치,
+> 온라인 1대1 대전을 더한 포크입니다.
 
 It was built and measured on an RTX 4060 and wants a desktop GPU. The download is about 22 MB (the
 arena is 13 MB of it) and it streams in behind the title screen.
@@ -111,6 +118,84 @@ The title shows the same list in ink. Nothing else is on screen outside the figh
   image files.
 
 ![A deflect: sparks flare between the blades](media/03-deflect.jpg)
+
+## Online and the general
+
+### Modes
+
+| Title choice | You | Against |
+|---|---|---|
+| 忍 Kunoichi vs AI | the kunoichi (keyboard + mouse) | the AI general: the original game, unchanged |
+| 将 General vs AI | the general | an AI kunoichi that deflects, mikiris, jumps sweeps and kicks off your head; Easy / Medium / Hard set its reaction error and how many blows it misses (the rules stay on Medium) |
+| 対 Online duel | the side you pick (the room's host decides) | another player: one kunoichi, one general |
+
+Online: **Create room** gives a five-letter code and a link to send; **Join** takes a code;
+**Quick match** pairs you with the next player waiting. After the fight both press Enter for a
+rematch, Esc leaves.
+
+### The general's controls
+
+| Input | Action |
+|---|---|
+| W A S D | Move (camera-relative; he always turns to face her) |
+| Left mouse / J | Three-cut string |
+| F | Overhead |
+| C | Delayed string (the third blow hangs to catch early deflects) |
+| Right mouse / K | Guard; tap it as her cut lands to deflect it (her rule and her anti-mash) |
+| Q · E · R | 危 Perilous thrust · sweep · grab (shared cooldown; grab from his second life) |
+| X | Flurry (second life) |
+| Space | Leap in (from 2.8 m, cooldown) |
+| Shift | Step (i-frames); hold to run |
+| Tab | Lock on / free camera |
+
+Everything an attack does once it starts (its timings, lunges, glints, openings, what a deflect or
+a mikiri does to him) is the same data the AI general fights with. Strings follow only where the
+AI's do: press the next attack at the end of one (leap → thrust or sweep; in the second life
+flurry → thrust, string → grab, delayed string → sweep). He stays open after every attack, a guard
+that isn't raised is cut clean, and the move panel bottom-right shows which perilous attacks are
+ready.
+
+### How the netcode works
+
+The fight was already deterministic (a fixed 120 Hz step and seeded randomness, for the test
+harness), so online play is **deterministic lockstep**: the two browsers send each other nothing
+but input frames and each runs the whole duel itself. A frame sampled at tick *t* is played at
+tick *t + delay*, where the delay is picked from the measured round trip before the fight (3 ticks,
+25 ms, on a LAN), so on a normal connection neither side waits. Details:
+
+- **Transport.** The server only introduces the two players (room codes, quick match) and passes
+  the WebRTC handshake. The duel then runs over two DataChannels straight between them: inputs on
+  an unordered no-retransmit channel, with every packet carrying all frames not yet acknowledged,
+  and control messages on a reliable one. If no direct link can be opened (no TURN server is used)
+  the same traffic goes through the server's WebSocket relay instead.
+- **Same start.** An online page never runs the title simulation: the sim stays frozen from page
+  load until START, so both machines begin from the state the page was built in, however long
+  each one sat in the lobby. Rematches start from states that are already identical.
+- **Checked.** Every second both sides hash the fight state and compare. On a mismatch (a
+  browser engine whose `Math` differs, say) the host names a tick the guest can't have reached
+  yet, and the guest waits there for the host's gameplay state. Two Chrome instances have never
+  needed one in testing; an injected corruption is repaired by a single resync.
+- **Builds.** Players are only paired with the same build (the git commit), since lockstep needs
+  identical code on both ends.
+
+`tools/netplay.mjs` runs two real browsers through the lobby server (the kunoichi's side runs the
+deflect bot through its keyboard controller, the general's side mashes his moveset) and prints
+both machines' view every 5 s. `NET_EXTRA="&p2p=0&lag=60"` forces the relay and adds 60 ms each
+way; `NET_DESYNC=1` corrupts the guest's copy once to exercise the resync. `tools/general.mjs`
+plays a scripted general against the AI kunoichi with real key events.
+
+### Running it online yourself
+
+```bash
+pnpm build
+node server/server.mjs          # serves dist/ and the lobby on http://localhost:7860
+node tools/netplay.mjs 60       # two browsers, one duel
+tools/deploy-hf.sh              # the same thing as a Docker Hugging Face Space
+```
+
+The dev server (`pnpm dev`, port 5411) looks for the lobby on `ws://localhost:7860/ws`;
+`?signal=wss://host/ws` points any build at another lobby. The GitHub Pages build uses the
+Hugging Face Space's lobby.
 
 ## Tools
 

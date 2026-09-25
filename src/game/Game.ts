@@ -32,7 +32,7 @@ import { FighterSlot } from "../chars/FighterSlot";
 import { General } from "../chars/General";
 import { Shinobi } from "../chars/Shinobi";
 import { FIXED_DT, Loop } from "../core/Loop";
-import { Input } from "../core/Input";
+import { Input, type PromptKey } from "../core/Input";
 import { clamp, damp, lerp, segSegDist, smooth } from "../core/math";
 import { Fx } from "../fx/Fx";
 import { Snow } from "../fx/Snow";
@@ -43,6 +43,8 @@ import { RIM, SUN_DIR, installFog } from "../world/materials";
 import { ATTACKS, BOSS_MAX, Boss, OPEN, type HitDef } from "./Boss";
 import { applyDifficulty, DIFFICULTY, DIFFICULTY_NAMES, type DifficultyName, initialDifficulty, isDifficulty, rememberDifficulty } from "./difficulty";
 import { CameraRig } from "./CameraRig";
+import { FLAG, hashValues, type Frame, type Lockstep, type Role } from "../net/Lockstep";
+import { loadFields, saveFields } from "./state";
 import { KICK_REACH, PLAYER_MAX, Player, vitalityRegen } from "./Player";
 
 export const HITSTOP_DEFLECT = 0.07;
@@ -62,6 +64,26 @@ export function deflectPosture(h: HitDef, chain: number): number {
 }
 
 type GState = "title" | "fight" | "deathblow" | "finisher" | "victory" | "dying" | "defeat";
+/**
+ * solo: the kunoichi against the AI general (the original game). general: a human at the
+ * general's controls against the AI kunoichi. online: one player each, over the network.
+ */
+export type Mode = "solo" | "general" | "online";
+/** The duel's own rule state (a netplay resync carries these across). */
+const NET_FIELDS = [
+  "state", "gameTime", "hitstop", "slowT", "slowDur", "slowScale", "timeScale", "locked", "genLocked", "windK", "wind", "pending",
+  "contact", "touchS", "touch", "finTl", "avoidB", "avoidP", "endT", "promptShown", "desatTarget", "barsTarget", "finInk2",
+  "finPlunged", "deflectChain", "lastDeflectT", "sweepSeen", "throwLanded", "grabSeen", "nearMissSeen", "postureHot", "stats",
+];
+function pick(o: object, keys: string[]): Record<string, unknown> {
+  return saveFields(o, [], {}, keys);
+}
+/** Skill of the AI kunoichi (the general mode's difficulty): reaction error (s) and share of blows missed. */
+const BOT_SKILL: Record<DifficultyName, { jitter: number; miss: number; swing: number }> = {
+  easy: { jitter: 0.1, miss: 0.34, swing: 1.8 },
+  medium: { jitter: 0.06, miss: 0.18, swing: 1.3 },
+  hard: { jitter: 0.03, miss: 0.07, swing: 0.9 },
+};
 
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
@@ -129,8 +151,28 @@ export class Game {
   readonly cam: CameraRig;
   readonly hud: Hud;
   readonly audio = new GameAudio();
-  readonly input: Input;
+  /** The keyboard and mouse (menus, camera, pointer lock, and whichever fighter is local). */
+  readonly dom: Input;
+  /** Her controls: the keyboard in solo, a virtual controller for the AI kunoichi and netplay. */
+  input: Input;
+  /** A human general's controls (null: the AI brain). */
+  bossInput: Input | null = null;
   readonly loop: Loop;
+  mode: Mode = "solo";
+  /** The fighter on this machine's keyboard. */
+  localRole: Role = "shinobi";
+  /** Netplay session (online mode). */
+  net: Lockstep | null = null;
+  /** Online, before the first START: the sim is frozen so both browsers begin from the same state. */
+  netLobby = false;
+  /** Menu answers the local player made during a netplay match, sent in the next frame. */
+  netFlags = 0;
+  /** Netplay flags of the frames of the tick being run. */
+  private tickFlags = { shinobi: 0, general: 0 };
+  /** Camera headings driving each fighter's movement this tick. */
+  private shinobiYaw = 0;
+  /** Called on netplay lifecycle moments (rematch agreed, match over) for the menu. */
+  onNet: ((e: "rematch" | "end" | "leave") => void) | null = null;
 
   state: GState = "title";
   gameTime = 0;
@@ -188,6 +230,10 @@ export class Game {
     miss: 0,
     seed: 1,
     plan: [] as { off: number; miss: boolean }[],
+    /** Seconds between its cuts into his idle guard. */
+    swingGap: 1.4,
+    /** Drive the keyboard controller instead of her virtual one (netplay tests). */
+    dom: false,
   };
   private botRand(): number {
     this.bot.seed = (this.bot.seed * 16807) % 2147483647;
@@ -228,12 +274,13 @@ export class Game {
     this.cam = new CameraRig(this.camera);
     this.post = new Post(this.renderer, this.scene, this.camera, this.arena.surround.sunMesh);
     this.hud = new Hud(hudRoot);
-    this.input = new Input(canvas);
+    this.dom = new Input(canvas);
+    this.input = this.dom;
     this.hud.setDifficulty(this.difficulty);
     this.hud.onDifficultyPick = (d) => {
       if (this.state === "title") this.setDifficulty(d, true);
     };
-    this.input.onKeyDown = (code) => this.titleKey(code);
+    this.dom.onKeyDown = (code) => this.titleKey(code);
     this.loop = new Loop(
       (dt) => this.fixed(dt),
       (dt, alpha) => this.frame(dt, true, alpha),
@@ -312,14 +359,14 @@ export class Game {
   private go(s: GState): void {
     // Pointer lock and the hidden cursor belong to the fight; every menu / overlay frees the mouse.
     const fighting = s === "fight" || s === "deathblow" || s === "finisher";
-    this.input.lockable = fighting;
+    this.dom.lockable = fighting;
     document.body.classList.toggle("fighting", fighting);
-    if (!fighting) this.input.releaseLock();
-    else if (this.state !== "fight" && this.state !== "deathblow" && this.state !== "finisher") this.input.requestLock();
+    if (!fighting) this.dom.releaseLock();
+    else if (this.state !== "fight" && this.state !== "deathblow" && this.state !== "finisher") this.dom.requestLock();
     this.state = s;
     this.endT = 0;
     this.promptShown = false;
-    this.input.disarmPrompt();
+    this.dom.disarmPrompt();
   }
 
   private resetActors(): void {
@@ -344,8 +391,10 @@ export class Game {
     this.bot.healed = false;
     this.sweepSeen = this.throwLanded = this.grabSeen = -1;
     this.audio.setDuck(1);
-    this.input.flush();
-    this.input.resetMash();
+    for (const inp of this.controls()) {
+      inp.flush();
+      inp.resetMash();
+    }
     this.prevP.copy(this.player.pos);
     this.prevB.copy(this.boss.pos);
     // Settle poses and cloth.
@@ -397,8 +446,81 @@ export class Game {
     this.hud.showFight(false);
     this.hud.hideEnd();
     this.audio.setTaiko(false);
-    this.input.armPrompt("any", 0.3);
+    this.dom.armPrompt("any", 0.3);
   }
+
+  /** The general's own lock-on (his camera; he always turns to face her). */
+  private genLocked = true;
+
+  /** The local player's lock-on. */
+  private get camLocked(): boolean {
+    return this.localRole === "general" ? this.genLocked : this.locked;
+  }
+
+  /**
+   * The menu answer this step reads. Netplay: only the kunoichi's player chooses whether she
+   * rises, and the answer arrives in her frame; a rematch needs both players' flag.
+   */
+  private takePrompt(): PromptKey | null {
+    const local = this.dom.takePrompt();
+    if (!this.net) {
+      // The AI kunoichi always gets back up.
+      if (this.mode === "general" && this.state === "dying" && this.promptShown) return "confirm";
+      return local;
+    }
+    if (local) {
+      if (this.state === "dying" && this.localRole === "shinobi") this.netFlags |= local === "confirm" ? FLAG.confirm : FLAG.back;
+      else if (this.state === "victory" || this.state === "defeat") {
+        if (local === "confirm") {
+          this.netFlags |= FLAG.rematch;
+          this.hud.promptText("waiting for your opponent  ·  Esc  ·  leave");
+          this.dom.armPrompt("menu", 0.25);
+        } else this.onNet?.("leave");
+      } else if (this.state === "dying") this.dom.armPrompt("menu", 0.25);
+    }
+    if (this.state !== "dying") return null;
+    const f = this.tickFlags.shinobi;
+    return f & FLAG.confirm ? "confirm" : f & FLAG.back ? "back" : null;
+  }
+
+  /** Every controller the fight reads (hers, and a human general's). */
+  private controls(): Input[] {
+    return this.bossInput && this.bossInput !== this.input ? [this.input, this.bossInput] : [this.input];
+  }
+
+  /**
+   * Put the fighters under the right hands. solo: the keyboard is hers, the AI has him.
+   * general: the keyboard is his, the AI kunoichi runs on a virtual controller. online: both
+   * fighters run on virtual controllers fed by the lockstep frames.
+   */
+  setMode(mode: Mode, role: Role = mode === "general" ? "general" : "shinobi"): void {
+    this.mode = mode;
+    this.localRole = role;
+    this.dom.map = role;
+    this.input = mode === "solo" ? this.dom : new Input(null);
+    this.bossInput = mode === "solo" ? null : mode === "general" ? this.dom : new Input(null);
+    this.boss.pilot = this.bossInput;
+    this.cam.frameBack = role === "general" ? 1.1 : 0;
+    this.cam.frameUp = role === "general" ? 0.45 : 0;
+    this.bot.play = this.bot.deflect = mode === "general";
+    this.hud.setRole(role, mode);
+  }
+
+  /** The AI kunoichi's skill follows the difficulty choice (the rules stay on Medium). */
+  private applyBotSkill(): void {
+    const k = BOT_SKILL[this.difficulty];
+    this.bot.jitter = k.jitter;
+    this.bot.miss = k.miss;
+    this.bot.swingGap = k.swing;
+    this.bot.seed = 1 + this.fightsStarted * 7919;
+  }
+
+  /** The rules this fight runs on: the title's choice, or Medium when a human has the general. */
+  private rulesDifficulty(): DifficultyName {
+    return this.mode === "solo" ? this.difficulty : this.mode === "general" ? "medium" : this.netDifficulty;
+  }
+  /** Rules of a netplay match (the host's choice, sent with START). */
+  netDifficulty: DifficultyName = "medium";
 
   /** Choose the difficulty for the next fight (the title's selector, tests). */
   setDifficulty(d: DifficultyName, remember = false): void {
@@ -428,8 +550,9 @@ export class Game {
     this.fightsStarted++;
     this.audio.start();
     this.audio.uiStart();
-    applyDifficulty(this.difficulty);
+    applyDifficulty(this.rulesDifficulty());
     this.hud.fightDifficulty(this.difficulty);
+    if (this.mode === "general") this.applyBotSkill();
     this.resetActors();
     this.go("fight");
     this.hud.showTitle(false);
@@ -445,7 +568,7 @@ export class Game {
   /** Skip the title and begin the fight immediately (tests). */
   startFight(): void {
     this.fightsStarted++;
-    applyDifficulty(this.difficulty);
+    applyDifficulty(this.rulesDifficulty());
     this.hud.fightDifficulty(this.difficulty);
     this.resetActors();
     this.go("fight");
@@ -460,7 +583,137 @@ export class Game {
 
   // ------------------------------------------------------------------ fixed step
 
-  private fixed(dt: number): void {
+  /** One 120 Hz step. Netplay: false when the other player's frame for this tick isn't in yet. */
+  private fixed(dt: number): boolean {
+    const net = this.net;
+    if (this.netLobby) return true;
+    if (net) {
+      if (!net.canStep()) return false;
+      net.produce(this.localFrame());
+      const f = net.frames();
+      this.input.applyFrame(f.shinobi.held, f.shinobi.taps);
+      this.input.botAxis = { x: f.shinobi.ax, y: f.shinobi.ay };
+      this.bossInput!.applyFrame(f.general.held, f.general.taps);
+      this.bossInput!.botAxis = { x: f.general.ax, y: f.general.ay };
+      this.shinobiYaw = f.shinobi.yaw;
+      this.boss.pilotYaw = f.general.yaw;
+      this.tickFlags.shinobi = f.shinobi.flags;
+      this.tickFlags.general = f.general.flags;
+    } else if (this.mode === "general") {
+      // The AI kunoichi walks toward / away from him; the human general moves with his camera.
+      this.shinobiYaw = Math.atan2(this.boss.pos.x - this.player.pos.x, this.boss.pos.z - this.player.pos.z);
+      this.boss.pilotYaw = this.cam.moveYaw;
+    } else this.shinobiYaw = this.cam.moveYaw;
+    this.stepSim(dt);
+    if (net) net.advance(() => this.netHash());
+    this.steppedThisFrame = true;
+    return true;
+  }
+
+  private steppedThisFrame = false;
+
+  /** Join a netplay match: the lobby holds the sim frozen until `netStart`. */
+  attachNet(net: Lockstep): void {
+    this.net = net;
+    this.netLobby = true;
+    this.setMode("online", net.role);
+    net.getState = () => this.saveNetState();
+    net.onResync = (st) => this.loadNetState(st as Record<string, unknown>);
+    this.boss.passive = true;
+  }
+
+  /** Both players are in and ready: tick 0 is the general's opening leap, on both machines. */
+  netStart(difficulty: DifficultyName): void {
+    this.netDifficulty = difficulty;
+    this.netLobby = false;
+    this.gameTime = 0;
+    this.windK = 0.4;
+    this.beginIntro();
+  }
+
+  /**
+   * The fight state both machines must agree on, hashed every HASH_EVERY ticks. Gameplay only:
+   * the bodies follow from it, and a resync can't carry a body's animation mixer across (so after
+   * one, blade poses may differ by a hair until the next clip change on both).
+   */
+  private netHash(): number {
+    const p = this.player;
+    const b = this.boss;
+    return hashValues([
+      this.gameTime,
+      this.state,
+      p.pos.x,
+      p.pos.y,
+      p.pos.z,
+      p.yaw,
+      p.health,
+      p.posture,
+      p.state,
+      p.stateT,
+      b.pos.x,
+      b.pos.y,
+      b.pos.z,
+      b.yaw,
+      b.health,
+      b.posture,
+      b.state,
+      b.stateT,
+      b.markers,
+      p.ch.clipName,
+      b.ch.clipName,
+    ]);
+  }
+
+  /** Everything the rules read (not the bodies: they are re-posed from this on the next step). */
+  private saveNetState(): Record<string, unknown> {
+    return {
+      game: pick(this, NET_FIELDS),
+      player: this.player.saveState(),
+      boss: this.boss.saveState(),
+      inputs: [this.input.saveState(), this.bossInput?.saveState() ?? null],
+      held: [this.held.has(this.player.ch), this.held.has(this.boss.ch)],
+      clips: [this.player.ch.clipName, this.boss.ch.clipName],
+    };
+  }
+
+  private loadNetState(st: Record<string, unknown>): void {
+    const g = st.game as Record<string, unknown>;
+    const prev = this.state;
+    loadFields(this, g);
+    this.player.loadState(st.player as Record<string, unknown>);
+    this.boss.loadState(st.boss as Record<string, unknown>);
+    const [a, b] = st.inputs as unknown[];
+    this.input.loadState(a);
+    if (b && this.bossInput) this.bossInput.loadState(b);
+    this.releaseHolds();
+    const [hp, hb] = st.held as boolean[];
+    if (hp) {
+      this.player.ch.setHold(true);
+      this.held.add(this.player.ch);
+    }
+    if (hb) {
+      this.boss.ch.setHold(true);
+      this.held.add(this.boss.ch);
+    }
+    // Bodies onto the host's clips, at the point the rules say they are.
+    const [cp, cb] = st.clips as string[];
+    const at = (s: string, t: number) => (s === "move" || s === "idle" || s === "wait" ? 0 : Math.max(0, t));
+    this.player.setClip(cp || "idle", 0.06, at(this.player.state, this.player.stateT));
+    this.boss.setClip(cb || "idle", 0.06, at(this.boss.state, this.boss.stateT));
+    if (prev !== this.state) this.hud.showFight(this.state === "fight" || this.state === "deathblow");
+  }
+
+  /** What the local player is doing, as a lockstep frame. */
+  private localFrame(): Frame {
+    const s = this.dom.sample();
+    const a = this.dom.axis();
+    const flags = this.netFlags;
+    // One-shot answers (rise / die); a rematch request stays up until the rematch starts.
+    this.netFlags &= FLAG.rematch;
+    return { held: s.held, taps: s.taps, ax: a.x, ay: a.y, yaw: this.cam.moveYaw, flags };
+  }
+
+  private stepSim(dt: number): void {
     this.prevP.copy(this.player.pos);
     this.prevB.copy(this.boss.pos);
     // Time scale: hitstop (real-time countdown) > slow-mo > finisher curve.
@@ -477,7 +730,7 @@ export class Game {
     this.timeScale = ts;
     const g = dt * ts;
     this.gameTime += g;
-    this.input.clock = this.gameTime;
+    for (const inp of this.controls()) inp.clock = this.gameTime;
 
     // Wind builds with the fight.
     const fightK = this.state === "title" ? 0.35 : 0.55 + (1 - this.boss.health / 100) * 0.35;
@@ -487,12 +740,12 @@ export class Game {
 
     const p = this.player;
     const b = this.boss;
-    const prompt = this.input.takePrompt();
+    const prompt = this.takePrompt();
     switch (this.state) {
       case "title":
         b.update(g, p.pos, true);
         p.update(g, null, this.cam.moveYaw, b.pos, true);
-        if (prompt) this.beginIntro();
+        if (prompt && !this.net) this.beginIntro();
         break;
       case "fight":
         this.fight(g);
@@ -515,10 +768,20 @@ export class Game {
         if (!this.promptShown && this.endT > (this.state === "victory" ? 4.5 : 1.0)) {
           this.promptShown = true;
           this.hud.showPrompt();
-          this.input.armPrompt("menu", 0.25);
+          this.dom.armPrompt("menu", 0.25);
+          if (this.net) this.onNet?.("end");
         }
-        if (prompt && this.promptShown) {
-          if (this.state === "victory" || prompt === "back") this.toTitle();
+        if (this.net) {
+          // Rematch once both have asked for it (the same tick on both machines).
+          if (this.promptShown && this.tickFlags.shinobi & FLAG.rematch && this.tickFlags.general & FLAG.rematch) {
+            this.netFlags = 0;
+            this.onNet?.("rematch");
+            this.beginIntro();
+          }
+        } else if (prompt && this.promptShown) {
+          if (prompt === "back") this.toTitle();
+          else if (this.mode !== "solo") this.beginIntro();
+          else if (this.state === "victory") this.toTitle();
           else this.beginIntro();
         }
         break;
@@ -537,9 +800,17 @@ export class Game {
     const inp = this.input;
     if (inp.consume("lock", 0.3)) {
       this.locked = !this.locked;
-      this.cam.setMode(this.locked ? "lock" : "free");
-      // Target reset: unlocking puts the free camera behind the shinobi, facing the general.
-      if (!this.locked) this.cam.yaw = Math.atan2(b.pos.x - p.pos.x, b.pos.z - p.pos.z);
+      if (this.localRole === "shinobi") {
+        this.cam.setMode(this.locked ? "lock" : "free");
+        // Target reset: unlocking puts the free camera behind the shinobi, facing the general.
+        if (!this.locked) this.cam.yaw = Math.atan2(b.pos.x - p.pos.x, b.pos.z - p.pos.z);
+      }
+    }
+    // The general's own camera toggle (his movement follows his camera; he always faces her).
+    if (this.bossInput?.consume("lock", 0.3) && this.localRole === "general") {
+      this.genLocked = !this.genLocked;
+      this.cam.setMode(this.genLocked ? "lock" : "free");
+      if (!this.genLocked) this.cam.yaw = Math.atan2(p.pos.x - b.pos.x, p.pos.z - b.pos.z);
     }
     this.runBot();
 
@@ -562,7 +833,7 @@ export class Game {
     b.sense.down = false;
     b.sense.reviving = p.state === "revive";
     b.sense.airborne = p.airborne;
-    p.update(g, inp, this.cam.moveYaw, b.pos, this.locked);
+    p.update(g, inp, this.shinobiYaw, b.pos, this.locked);
     b.update(g, p.pos, false);
     // Held by the throat through the throw.
     if (p.state === "thrown" && b.state === "throw") {
@@ -637,7 +908,7 @@ export class Game {
     }
 
     // Player → general.
-    if (p.swingActive && b.hittable) {
+    if (p.swingActive && b.hittable && !b.evading) {
       const cr = b.ch.rig.capsule(_a, _b);
       if (this.sweep(p.ch.rig, _a, _b, cr + 0.05)) {
         p.swingHit = true;
@@ -1022,7 +1293,12 @@ export class Game {
       this.audio.hitFlesh(true);
       this.hitstop = 0.035;
       this.cam.shake(0.12);
-    } else if (OPEN.has(b.state) || b.state === "stagger" || ((b.state === "idle" || b.state === "wait") && !sw.charged && b.slips())) {
+    } else if (
+      OPEN.has(b.state) ||
+      b.state === "stagger" ||
+      b.state === "evade" ||
+      ((b.state === "idle" || b.state === "wait") && (b.pilot ? !b.pilotGuarding() : !sw.charged && b.slips()))
+    ) {
       // In an opening (or his idle guard slipped): the cut lands in full.
       b.health -= sw.dmg;
       b.posture += sw.posture * DIFFICULTY.cutPostureOpen;
@@ -1134,7 +1410,7 @@ export class Game {
       this.promptShown = true;
       if (p.rez > 0) {
         this.hud.showDeath();
-        this.input.armPrompt("menu", 0.5);
+        this.dom.armPrompt("menu", 0.5);
       } else return this.trueDeath();
     }
     if (prompt && this.promptShown) {
@@ -1150,12 +1426,14 @@ export class Game {
     this.go("fight");
     p.revive();
     this.stats.resurrections++;
-    this.input.flush();
-    this.input.resetMash();
+    for (const inp of this.controls()) {
+      inp.flush();
+      inp.resetMash();
+    }
     this.hud.hideEnd();
     this.hud.showFight(true);
     this.desatTarget = 0;
-    this.cam.setMode(this.locked ? "lock" : "free");
+    this.cam.setMode(this.camLocked ? "lock" : "free");
     this.audio.revive();
     this.audio.setTaiko(true);
     this.fx.inkBurst(p.pos.clone().setY(0.6), new THREE.Vector3(0, 1, 0));
@@ -1165,7 +1443,7 @@ export class Game {
   private trueDeath(): void {
     this.go("defeat");
     this.stats.defeats++;
-    this.hud.showEnd("defeat");
+    this.hud.showEnd(this.localRole === "general" ? "victory" : "defeat");
     this.audio.setTaiko(false);
     this.desatTarget = 0.65;
   }
@@ -1260,7 +1538,7 @@ export class Game {
       this.go("fight");
       p.enter("move");
       p.setClip("idle", 0.2);
-      this.cam.setMode(this.locked ? "lock" : "free");
+      this.cam.setMode(this.camLocked ? "lock" : "free");
       this.barsTarget = 0;
       this.desatTarget = 0;
       this.audio.setDuck(1);
@@ -1331,7 +1609,7 @@ export class Game {
       this.go("victory");
       this.stats.victory = true;
       this.desatTarget = 0.65;
-      this.hud.showEnd("victory");
+      this.hud.showEnd(this.localRole === "general" ? "defeat" : "victory");
       this.cam.setMode("victory");
       p.enter("victory");
       p.setClip("victory", 0.4);
@@ -1405,7 +1683,9 @@ export class Game {
 
   private runBot(): void {
     const bot = this.bot;
-    const inp = this.input;
+    // Netplay tests: the bot presses the local keyboard controller, so its inputs travel the
+    // lockstep like a human's.
+    const inp = bot.dom ? this.dom : this.input;
     const b = this.boss;
     const p = this.player;
     if (bot.releaseAt > 0 && this.gameTime >= bot.releaseAt) {
@@ -1494,7 +1774,7 @@ export class Game {
         } else if (b.state === "idle" && d < 2.8) {
           inp.press("attack");
           inp.release("attack");
-          bot.nextSwing = this.gameTime + 1.4;
+          bot.nextSwing = this.gameTime + bot.swingGap;
         }
       }
     }
@@ -1513,8 +1793,14 @@ export class Game {
 
   frame(dt: number, render: boolean, alpha = 1): void {
     this.realTime += dt;
-    this.input.realClock = this.realTime;
-    const mouse = this.input.takeMouse();
+    // The frozen netplay lobby still poses the bodies (a zero-length step changes no state, so
+    // the two machines may do it any number of times), or a freshly loaded body shows its T-pose.
+    if (this.netLobby) {
+      this.player.step(0, this.wind, this.gameTime);
+      this.boss.step(0, this.wind, this.gameTime);
+    }
+    this.dom.realClock = this.realTime;
+    const mouse = this.dom.takeMouse();
     const p = this.player;
     const b = this.boss;
     // The camera frames the fighters where they are drawn (interpolated), not the raw sim steps.
@@ -1525,7 +1811,12 @@ export class Game {
     const ib = this.camB.addVectors(b.pos, this.interp.b);
     const ipc = this.camPC.addVectors(p.ch.rig.chestW, this.interp.p);
     const ibc = this.camBC.addVectors(b.ch.rig.chestW, this.interp.b);
-    this.cam.update(dt, ip, ipc, ib, ibc, mouse);
+    // A human general gets the over-the-shoulder view from his side of the duel.
+    const behindHim = this.localRole === "general" && (this.cam.mode === "lock" || this.cam.mode === "free" || this.cam.mode === "intro");
+    if (behindHim) this.cam.update(dt, ib, ibc, ip, ipc, mouse);
+    else this.cam.update(dt, ip, ipc, ib, ibc, mouse);
+    if (this.net) this.net.pump(dt, this.steppedThisFrame);
+    this.steppedThisFrame = false;
     this.camera.updateMatrixWorld();
     RIM.uSunView.value.copy(SUN_DIR).transformDirection(this.camera.matrixWorldInverse);
 
