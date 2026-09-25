@@ -11,7 +11,7 @@
  * tick far enough ahead that the guest can't have passed it, and the guest waits there for the
  * host's gameplay state.
  */
-import type { CtlMsg, Transport } from "./Transport";
+import type { CtlMsg, Wire } from "./Transport";
 
 export type Role = "shinobi" | "general";
 
@@ -68,7 +68,7 @@ export class Lockstep {
   getState: (() => unknown) | null = null;
 
   constructor(
-    readonly t: Transport,
+    readonly t: Wire,
     readonly role: Role,
     readonly delay: number,
   ) {

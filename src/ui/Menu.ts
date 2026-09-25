@@ -204,7 +204,7 @@ export class Menu {
       if (e.key === "Enter") go();
       if (e.key === "Escape") c.classList.add("hidden");
     });
-    el("p", "small", c, "Chrome or Edge on both ends. The duel runs peer to peer; the server only introduces you (and relays if your networks block a direct link).");
+    el("p", "small", c, "Chrome or Edge on both ends. The duel runs peer to peer, straight between your two browsers; a matchmaking broker only introduces you.");
   }
 
   private openOnline(): void {

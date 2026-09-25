@@ -7,8 +7,7 @@ One sword duel in a browser tab: a kunoichi against a samurai general on a snowy
 dusk, fought the way Sekiro fights. You win by deflecting his blade until his posture breaks, not by
 whittling down a health bar, and then you drive the deathblow home. He gets up once, angrier.
 
-**Play it: https://hwkim3330.github.io/shinobi-duel/** (or on the Hugging Face Space,
-https://huggingface.co/spaces/kimhyunwoo/shinobi-duel) — desktop Chrome or Edge, keyboard and
+**Play it: https://hwkim3330.github.io/shinobi-duel/** — desktop Chrome or Edge, keyboard and
 mouse. Pick a side on the title: 忍 the kunoichi against the AI general (the original fight),
 将 the general against an AI kunoichi, or 対 an online duel against another player.
 
@@ -194,8 +193,11 @@ tools/deploy-hf.sh              # the same thing as a Docker Hugging Face Space
 ```
 
 The dev server (`pnpm dev`, port 5411) looks for the lobby on `ws://localhost:7860/ws`;
-`?signal=wss://host/ws` points any build at another lobby. The GitHub Pages build uses the
-Hugging Face Space's lobby.
+`?signal=wss://host/ws` points any build at another lobby. A build with no lobby of its own
+(GitHub Pages) meets through the public [PeerJS](https://peerjs.com) broker instead
+(`src/net/PeerTransport.ts`, or `?signal=peerjs` anywhere): same rooms and quick match, but no
+relay, so two networks that block every direct link can't duel that way. `tools/deploy-hf.sh`
+needs a Hugging Face PRO account (Docker Spaces aren't free on cpu-basic).
 
 ## Tools
 

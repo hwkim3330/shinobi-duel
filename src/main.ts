@@ -5,7 +5,8 @@ import { Input } from "./core/Input";
 import { deflectPosture, Game, KICK_HEAD_POSTURE, MIKIRI_POSTURE } from "./game/Game";
 import { GOURD, REZ } from "./game/Player";
 import { Lockstep, type Role } from "./net/Lockstep";
-import { type CtlMsg, signalURL, Transport } from "./net/Transport";
+import { PeerTransport } from "./net/PeerTransport";
+import { type CtlMsg, signalURL, Transport, type TransportEvents, type Wire } from "./net/Transport";
 import { Menu, type TitleMode } from "./ui/Menu";
 
 declare const __BUILD__: string;
@@ -291,7 +292,7 @@ game.onNet = (e) => {
 };
 if (!online) pickTitleMode(loadTitleMode());
 
-let transport: Transport | null = null;
+let transport: Wire | null = null;
 let lockstep: Lockstep | null = null;
 
 if (online) {
@@ -355,7 +356,7 @@ if (online) {
       begin(hostRole === "shinobi" ? "general" : "shinobi", m.delay as number, (m.d as DifficultyName) ?? "medium");
     }
   };
-  transport = new Transport(signalURL(), {
+  const events: TransportEvents = {
     onJoined: (room, host) => {
       menu.showLobby(onlineRoom ? room : null, host, host ? "waiting for your opponent…" : "joining…");
     },
@@ -370,7 +371,10 @@ if (online) {
       maybeStart();
     },
     onClosed: (why) => menu.showError(started ? `The duel was cut: ${why}.` : `Couldn't start the duel: ${why}.`),
-  });
+  };
+  // A lobby server of our own when there is one (it can relay); otherwise the public PeerJS broker.
+  const sig = signalURL();
+  transport = sig === "peerjs" ? new PeerTransport(events) : new Transport(sig, events);
   transport.open(onlineRoom ? onlineRoom.toUpperCase() : null, BUILD);
   // Tell the other side once the castle has loaded here.
   const readyWait = setInterval(() => {

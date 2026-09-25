@@ -10,6 +10,16 @@
 export type NetPath = "connecting" | "relay" | "p2p";
 export type CtlMsg = { t: string; [k: string]: unknown };
 
+/** What the lockstep and the lobby need of a wire (the WebSocket lobby, or the PeerJS broker). */
+export interface Wire {
+  readonly host: boolean;
+  readonly path: NetPath;
+  open(room: string | null, version: string): void;
+  close(): void;
+  sendInp(b: ArrayBuffer): void;
+  sendCtl(m: CtlMsg): void;
+}
+
 export interface TransportEvents {
   /** The lobby answered: our seat in the room. */
   onJoined?: (room: string, host: boolean) => void;
@@ -30,7 +40,7 @@ const later = (f: () => void) => (LAG ? setTimeout(f, LAG) : f());
 
 const ICE: RTCIceServer[] = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }, { urls: "stun:stun.cloudflare.com:3478" }];
 
-export class Transport {
+export class Transport implements Wire {
   host = false;
   room = "";
   path: NetPath = "connecting";
@@ -224,5 +234,5 @@ export function signalURL(): string {
   const ws = protocol === "https:" ? "wss:" : "ws:";
   if (hostname.endsWith(".hf.space") || import.meta.env.VITE_SAME_ORIGIN_SIGNAL) return `${ws}//${host}/ws`;
   if (hostname === "localhost" || hostname === "127.0.0.1") return `ws://${hostname}:7860/ws`;
-  return import.meta.env.VITE_SIGNAL_URL ?? "wss://kimhyunwoo-shinobi-duel.hf.space/ws";
+  return import.meta.env.VITE_SIGNAL_URL ?? "peerjs";
 }
