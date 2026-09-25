@@ -39,7 +39,8 @@ python3 - "$SPACE" "$STAGE" "deploy $(git rev-parse --short=10 HEAD)" <<'PY'
 import sys
 from huggingface_hub import HfApi
 space, stage, msg = sys.argv[1:]
-api = HfApi()
+import os
+api = HfApi(token=os.environ.get("HF_TOKEN") or None)
 api.create_repo(space, repo_type="space", space_sdk="docker", exist_ok=True)
 api.upload_folder(repo_id=space, repo_type="space", folder_path=stage, commit_message=msg, delete_patterns=["dist/*"])
 PY
