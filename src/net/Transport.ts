@@ -232,7 +232,7 @@ export function signalURL(): string {
   if (q) return q;
   const { protocol, host, hostname } = location;
   const ws = protocol === "https:" ? "wss:" : "ws:";
-  if (hostname.endsWith(".hf.space") || import.meta.env.VITE_SAME_ORIGIN_SIGNAL) return `${ws}//${host}/ws`;
+  if ((hostname.endsWith(".hf.space") && !hostname.endsWith(".static.hf.space")) || import.meta.env.VITE_SAME_ORIGIN_SIGNAL) return `${ws}//${host}/ws`;
   if (hostname === "localhost" || hostname === "127.0.0.1") return `ws://${hostname}:7860/ws`;
   return import.meta.env.VITE_SIGNAL_URL ?? "peerjs";
 }
